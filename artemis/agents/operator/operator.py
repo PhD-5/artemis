@@ -30,6 +30,7 @@ from artemis.graph.state import State
 from artemis.graph.visibility import strict_state
 from artemis.mcp.action_specs import OPERATOR_SHELL_ORDER, operator_shell_tool
 from artemis.llm.google import usage_from_message
+from artemis.runtime.yuri_activation import active_yuri
 from artemis.services.llm import acomplete, get_llm, invoke_llm_with_timeout_message
 from artemis.tools.command_tool import (
     analyze_task_output_wrapper,
@@ -178,7 +179,9 @@ class OperatorNode:
                 extension_names = frozenset(
                     e.name for e in actuator.extensions() if "operator" in e.targets
                 )
-                return available_device_actions(actuator) | extension_names
+                plugin = active_yuri(self.ctx)
+                yuri_actions = plugin.action_names("operator") if plugin is not None else frozenset()
+                return available_device_actions(actuator) | extension_names | yuri_actions
             except Exception as e:
                 logger.warning(f"Failed to read actuator capabilities: {e}")
         return REQUIRED_ACTIONS | OPTIONAL_ACTIONS
@@ -711,8 +714,12 @@ class OperatorNode:
                         action_calls = []
 
                 elif has_terminal_calls:
+                    plugin = active_yuri(self.ctx)
+                    deferring_tools = DEFERRING_TOOLS | (
+                        plugin.query_names("operator") if plugin is not None else frozenset()
+                    )
                     has_deferring_calls = any(
-                        normalize_name(tc["name"]) in DEFERRING_TOOLS for tc in other_calls
+                        normalize_name(tc["name"]) in deferring_tools for tc in other_calls
                     )
                     if has_deferring_calls:
                         logger.info(
@@ -751,8 +758,14 @@ class OperatorNode:
                 actions_list = []
                 burst_cap = self._max_burst_actions()
                 bounce = None
+                plugin = active_yuri(self.ctx)
+                if plugin is not None and len(action_calls) > 1 and any(
+                    normalize_name(tc["name"]) in plugin.action_names("operator")
+                    for tc in action_calls
+                ):
+                    bounce = "Yuri mutations must run alone, not in a fast-action burst. Nothing was executed."
                 if (
-                    not plan_gate_bounced
+                    bounce is None and not plan_gate_bounced
                     and iteration < max_iterations - 1
                     and len(action_calls) == 1
                     and not getattr(state, "open_incident", None)
@@ -914,6 +927,9 @@ class OperatorNode:
         all_tools = [
             operator_shell_tool(name) for name in OPERATOR_SHELL_ORDER if name in available_actions
         ] + self.tools
+        plugin = active_yuri(self.ctx)
+        if plugin is not None:
+            all_tools.extend(plugin.langchain_tools())
 
         # 5. Mount the task-output analyzer and collect background ADB task state.
         # The analyzer is always available: the "output truncated, use
@@ -1089,6 +1105,13 @@ class OperatorNode:
     ) -> tuple[list[dict], str | None]:
         tool_name = tc["name"].split(":")[-1] if ":" in tc["name"] else tc["name"]
         args = tc["args"]
+        plugin = active_yuri(self.ctx)
+        if plugin is not None and tool_name in plugin.action_names("operator"):
+            try:
+                params = plugin.validate_args(tool_name, args, "operator")
+            except ValueError as exc:
+                return [], str(exc)
+            return [{"action": tool_name, "args": params}], None
 
         # Get device resolution fallbacks
         width = 1080

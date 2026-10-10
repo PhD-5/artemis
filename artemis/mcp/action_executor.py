@@ -45,6 +45,7 @@ from artemis.mcp.action_specs import exception_prefix
 from artemis.mcp.action_session import ActionSession, get_action_session
 from artemis.mcp.action_types import ActionCode, ActionResult
 from artemis.mcp.actuators.adb import AdbActuator
+from artemis.runtime.yuri_activation import active_yuri
 from artemis.agents.validator.tool_declarations import (
     ToolExecutionResult,
     normalize_coordinate_target,
@@ -104,7 +105,11 @@ class McpActionExecutor:
     @property
     def action_tool_names(self) -> frozenset[str]:
         """Device actions plus backend extension names -- the dynamic dispatch set."""
-        return (REQUIRED_ACTIONS | OPTIONAL_ACTIONS) | {e.name for e in self.actuator.extensions()}
+        names = (REQUIRED_ACTIONS | OPTIONAL_ACTIONS) | {e.name for e in self.actuator.extensions()}
+        plugin = active_yuri(self.ctx)
+        if plugin is not None:
+            names = (names - plugin.specs.keys()) | plugin.action_names(self.agent_name)
+        return frozenset(names)
 
     async def _session_or_start(self) -> ActionSession:
         if self._session is None or not self._session.started:
@@ -133,6 +138,29 @@ class McpActionExecutor:
         shows).
         """
         raw_name = name.split(":")[-1] if ":" in name else name
+        plugin = active_yuri(self.ctx)
+        if plugin is not None and raw_name in plugin.specs:
+            try:
+                args = plugin.validate_args(raw_name, args, self.agent_name)
+            except ValueError as exc:
+                return ToolExecutionResult(
+                    tool_call_id=tool_call_id, tool_name=name, status="error", text_summary=str(exc),
+                )
+            if raw_name in plugin.query_names(self.agent_name):
+                with TraceSpan(name=raw_name, trace_type="tool", ctx=self.ctx) as span:
+                    span.payload = {"args": args}
+                    session = await self._session_or_start()
+                    payload = await plugin.call(session, raw_name, args, self.agent_name)
+                    span.result = payload
+                    if not payload["ok"]:
+                        span.status = "failed"
+                        span.error = payload["message"]
+                return ToolExecutionResult(
+                    tool_call_id=tool_call_id, tool_name=name,
+                    status="success" if payload["ok"] else "error",
+                    text_summary=payload["message"], raw_result=payload,
+                    metadata={"code": payload["code"], "data": payload.get("data")},
+                )
 
         if raw_name in AGENT_TOOL_NAMES:
             return await self._execute_agent_tool(raw_name, name, args, tool_call_id, state)
@@ -170,6 +198,7 @@ class McpActionExecutor:
         shot_path: str | None = None
         xml_list: str | None = None
         target_semantics: dict[str, Any] = {}
+        yuri_payload = None
         target_coordinates: list[int] | None = None
         with span:
             try:
@@ -190,7 +219,13 @@ class McpActionExecutor:
                         (b.text for b in raw_result.content if getattr(b, "type", "") == "text"),
                         f"Extension tool '{raw_name}' completed.",
                     )
-                    res = ActionResult.success(raw_name, message)
+                    plugin = active_yuri(self.ctx)
+                    if plugin is not None and raw_name in plugin.specs:
+                        yuri_payload = raw_result.structuredContent
+                        res = ActionResult.model_validate(yuri_payload)
+                        message = res.message
+                    else:
+                        res = ActionResult.success(raw_name, message)
                 else:
                     res = await session.call(wire_name, wire_args)
                     message = finalize(res) if finalize else res.message
@@ -237,12 +272,14 @@ class McpActionExecutor:
         return ToolExecutionResult(
             tool_call_id=tool_call_id,
             tool_name=name,
+            raw_result=yuri_payload,
             status=status,
             text_summary=message,
             screenshot_bytes=img_bytes,
             screenshot_path=shot_path,
             ui_elements_text=xml_list,
             metadata={
+                **({"data": yuri_payload.get("data")} if yuri_payload is not None else {}),
                 "code": res.code.value,
                 "normalized_coordinates": res.normalized_coordinates,
                 "target_semantics": target_semantics,

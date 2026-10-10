@@ -80,6 +80,7 @@ from artemis.llm.structured import ParseFailure, parse_structured
 from artemis.mcp.action_executor import McpActionExecutor
 from artemis.mcp.observation import observe
 from artemis.memory.transcript import PRO_UI_LIST_MARKER, TranscriptLedger, mark_ephemeral
+from artemis.runtime.yuri_activation import active_yuri
 from artemis.services.llm import (
     RobustChatModelWrapper,
     acomplete,
@@ -220,6 +221,9 @@ class FlashRunner:
             from artemis.mcp.action_manifest import filter_declarations
 
             tools = filter_declarations(tools, actuator, "flash")
+        plugin = active_yuri(self.ctx)
+        if plugin is not None:
+            tools.extend(plugin.declarations("flash"))
         return tools
 
     def _prune_intermediate_screenshots(self, messages: list[BaseMessage]) -> None:
@@ -931,6 +935,24 @@ class FlashRunner:
         final_report is non-None only when 'report_task_status' was called.
         """
         action_names = self.executor.action_tool_names
+        plugin = active_yuri(self.ctx)
+        if plugin is not None:
+            names = [tc["name"].split(":")[-1] for tc in tool_calls]
+            mixed_mutation = len(names) > 1 and any(name in plugin.action_names("flash") for name in names)
+            mixed_query = any(name in plugin.query_names("flash") for name in names) and any(
+                name in action_names for name in names
+            )
+            if mixed_mutation or mixed_query:
+                reason = (
+                    "Yuri mutations must run alone. Read Yuri query results before issuing an action."
+                    " Nothing was executed."
+                )
+                for tc, name in zip(tool_calls, names):
+                    messages.extend(tool_result_messages(
+                        tc.get("id") or str(uuid.uuid4()), reason, name=name,
+                        status="error", llm=self._llm,
+                    ))
+                return None, pre_screenshot_bytes, xml_list, action_sequence
         index_elements = self._turn_index_snapshot(state)
         for tc in tool_calls:
             name = tc["name"].split(":")[-1] if ":" in tc["name"] else tc["name"]

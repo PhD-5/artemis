@@ -251,6 +251,41 @@ if __name__ == "__main__":
 * **Developer CLI (`uv run artemis run`)**: Direct terminal execution for automated test cases, exploratory stability inspection, or AndroidWorld benchmarks with high-fidelity structured terminal output;
 * **Python SDK**: Integrates as a standard Python library into existing automated testing frameworks (e.g., pytest) or CI/CD pipelines with strongly typed Pydantic structured outputs and assertion support.
 
+### Optional Yuri Device Plugin (Flash / Pro)
+
+Yuri adds OCR, device configuration, app-data management, proxy and root RPC without replacing Android UI automation. **Ordinary tasks do not load the plugin, probe Yuri, or acquire Yuri tools**, even on a phone with YuriClient installed.
+
+Activation requires all three: configuration permission, an explicit positive Yuri request in the original user task, and a successful read-only RPC `ping` with a compatible version on the selected device. Prohibitions, quotations, code examples, pages and tool output cannot activate it; activation never carries over to another task.
+
+Set this inside `agent` in `config/artemis.jsonc`:
+
+```json
+"yuri": {
+  "enabled": true,
+  "allowed_tools": ["yuri_ping", "yuri_app_is_installed", "yuri_find_text", "yuri_click_text", "yuri_job_poll"],
+  "identity": "shell",
+  "compatible_versions": ["1.8.6"]
+}
+```
+
+Example: `Use Yuri to check whether com.example.app is installed`. Permission alone does not activate Yuri. SDK callers can use `AgentConfigBuilder.with_yuri(YuriConfig(...))`, importing `YuriConfig` from `artemis.config.yuri`. UI, CLI, MCP and SDK use the same task-start gate.
+
+* **Prerequisites:** install and start compatible YuriClient yourself, with a live `yuri.rpc` service and suitable ROM/SELinux permissions. ARTEMIS never installs, starts, restarts or escalates identity to repair a probe. An explicit request fails clearly if Yuri is unavailable, rather than silently substituting another capability. The distribution's `yuri` is a host wrapper; this plugin invokes the installed APK's Java CLI directly without pushing a script.
+* **Permissions:** `allowed_tools: null` selects queries and OCR clicks; `[]` permits nothing. Modification/reset, install/uninstall, data clear/backup/restore, settings writes, proxies, root shell and duplicate native UI RPC require explicit whitelist entries. See `artemis/tools/yuri.py` for names and parameters. Role `denylisted_tools` applies to declarations and direct calls. Modification/reset additionally requires a valid `ro.yuri.rom.version`.
+* **Outcomes:** query `false` and OCR miss `null` are valid answers; action `false`, nonzero shell status and Job `failed` or `done/false` are failures. Yuri mutations dispatch once, alone in a turn, without fast bursts or automatic retries. System operations use argument/device preconditions rather than a UI pixel check.
+* **Jobs:** acknowledged submission is followed by bounded completion polling. A polling timeout retains a task-local opaque `job_id` and an unknown outcome; allow `yuri_job_poll` alongside Job tools to resume querying. If submission is not acknowledged, no handle is available and remote execution remains uncertain: never resubmit automatically. Restarting Yuri, switching devices or starting another task invalidates old handles. Cancelling ARTEMIS does not cancel a remote Job.
+  Jobs bind to PID, start ticks and executable address bounds, not `boot_id`, which device modification can virtualize. If the ROM protects this process metadata, explicitly configure `identity: "su_brt"` or `"su"`. Unverifiable metadata fails before submission without automatic privilege escalation.
+* **Arguments/artifacts:** OCR outputs use absolute device pixels; screenshots are retrieved to host artifacts (app-private files may need an explicitly configured root identity). Installation accepts safe device paths or HTTP(S) APK/XAPK URLs without query/fragment. Unsafe command-fragment characters are rejected because JSON quoting cannot fix Yuri's internal shell interpolation. A backup success does not independently verify archive integrity.
+* **Live end-to-end acceptance:** `scripts/yuri_real_device_acceptance.py` runs six proxy, modification and ordinary-task scenarios through production `Agent.run_task(profile="flash"/"pro")` using the configured model, without mocking models or RPC. Acceptance requires actual Yuri actions in runner execution records, a changed exit IP, target-UID-visible properties and no Yuri probe/RPC for ordinary tasks. Root-UID hardware properties or a cached profile alone do not prove modification.
+  Run on an online `su_brt` device with running Yuri 1.8.6 and an existing `sec.prop`:
+  ```bash
+  uv run --no-sync python scripts/yuri_real_device_acceptance.py \
+    --device-id SERIAL --modes flash pro --output-dir traces/yuri-acceptance \
+    --proxy-url-file /private/path/to/ss-uri.txt
+  ```
+  The private input file contains an SS URI; the runner supports the tested simple-obfs HTTP/TLS nodes. It temporarily uses loopback SOCKS without TUN and a Yuri-UID proxy, then restores profile/proxy files, timezone and clock settings without globally flushing NAT. Recovery data is persisted in `restore.json`; after interruption use the same output directory with `--restore-only`. Reports retain real sessions, actions, screenshots and Checker conclusions. An inconclusive Checker is explicitly distinguished from independent device acceptance. Input, recovery files and normal agent traces can contain credentials; keep them private.
+
+
 <a id="on-device-helper"></a>
 ## What ARTEMIS Installs on Your Phone
 

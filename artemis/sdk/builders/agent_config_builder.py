@@ -23,6 +23,7 @@ from artemis.config import (
     load_agent_config,
     settings,
 )
+from artemis.config.yuri import YuriConfig
 from artemis.context import DevicePlatform
 from artemis.sdk.types.agent import AgentConfig, ServerConfig
 from artemis.utils.video import detect_video_tools_enabled
@@ -71,6 +72,7 @@ class AgentConfigBuilder(AgentConfigBuilderBase):
         self._disable_outputter = not agent_cfg.outputter.enabled
         self._flash = agent_cfg.flash
         self._pro = agent_cfg.pro
+        self._yuri = agent_cfg.yuri
 
     def for_device_serial(self, device_serial: str) -> "AgentConfigBuilder":
         """Target a specific Android device by its ADB serial number."""
@@ -418,8 +420,14 @@ class AgentConfigBuilder(AgentConfigBuilderBase):
         self._denylisted_tools = tools
         return self
 
+    def with_yuri(self, config: YuriConfig) -> "AgentConfigBuilder":
+        """Allow Yuri tools; an explicit user task and successful probe are still required."""
+        self._yuri = config
+        return self
+
     def _extra_config_fields(self) -> dict[str, Any]:
         return {
+            "yuri": self._yuri,
             "device_id": (
                 self._device_id
                 or os.environ.get("ARTEMIS_DEVICE_ID")

@@ -21,6 +21,7 @@ from artemis.config import (
     ProProfileConfig,
     VideoAnalyzerConfig,
 )
+from artemis.config.yuri import YuriConfig
 from artemis.context import DevicePlatform
 from artemis.utils.video import detect_video_tools_enabled
 from third_party.mobile_use.sdk.types.agent import (
@@ -40,6 +41,8 @@ class AgentConfig(AgentConfigBase):
     Adds the Checker, Outputter, Explorer, video-analysis and concurrency
     settings to :class:`AgentConfigBase`.
     """
+
+    yuri: YuriConfig = Field(default_factory=YuriConfig)
 
     video_recording_tools_enabled: bool = Field(default_factory=detect_video_tools_enabled)
     force_web_accessibility: bool = False

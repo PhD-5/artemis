@@ -51,6 +51,7 @@ from artemis.agents.validator.incidents import (
 )
 from artemis.data_engine.trace import CURRENT_TRACE_ID
 from artemis.graph.state import State
+from artemis.runtime.yuri_activation import active_yuri
 from artemis.utils.coordinates import normalize_action_dict
 from artemis.utils.task_tree import format_action_clean
 from third_party.mobile_use.utils.logger import get_logger
@@ -145,7 +146,7 @@ async def _attempt_local_execution(
         if exec_success:
             success = True
             error_msg = ""
-            attempts_log.append("Dispatched")
+            attempts_log.append(action_item.get("yuri_result", {}).get("message", "Dispatched"))
             break
         else:
             success = False
@@ -182,7 +183,21 @@ async def _process_action(
     attempts_log = []
 
     validation_passed = True
-    if not burst:
+    plugin = active_yuri(node.ctx)
+    yuri_action = plugin is not None and action_name in plugin.specs
+    if yuri_action:
+        # Yuri resolves OCR targets at dispatch time; system capabilities have
+        # domain/schema preconditions, not a screen-coordinate Safety Net.
+        try:
+            if burst or action_name not in plugin.action_names("validator"):
+                raise ValueError("Yuri mutations must be permitted and dispatched alone.")
+            action_item["args"] = plugin.validate_args(action_name, action_item.get("args", {}), "validator")
+        except ValueError as exc:
+            outcome.intercepted = True
+            outcome.error_msg = str(exc)
+            validation_passed = False
+            attempts_log.append(str(exc))
+    if not burst and not yuri_action:
         # 1. Pre-execution validation (Safety Net)
         original_coords = list(action_item.get("coordinates") or [])
         (
@@ -202,7 +217,7 @@ async def _process_action(
     if validation_passed:
         # 2. Local execution: a vetted action gets a short retry loop, a burst
         # member fires exactly once (retries would break the burst's timing).
-        if burst:
+        if burst or yuri_action:
             max_local_retries = 1
         else:
             max_local_retries = 1 if action_name == "launch_app" else 2

@@ -183,6 +183,8 @@ class ArtemisContext(DeviceClientAccessors, BaseModel):
     actuator: Any | None = None
     """Optional actuator backend override (artemis.mcp.actuators). ``None`` selects
     the default AdbActuator; installing e.g. a robot-arm backend happens here."""
+    yuri_plugin: Any | None = None
+    """Optional, successfully probed Yuri plugin, scoped to the original user task."""
 
     step_memory: Any | None = None
     """Shared :class:`~artemis.memory.step_memory.StepMemoryService` composition
@@ -208,6 +210,8 @@ class ArtemisContext(DeviceClientAccessors, BaseModel):
                 logger.debug(f"Action session close failed; skipped: {exc}", exc_info=True)
             finally:
                 self.action_session = None
+        if self.yuri_plugin is not None:
+            await self.yuri_plugin.aclose()
 
         # Drain in-flight step-summary jobs before the generic background-task
         # sweep: the shared service owns its own bounded flush semantics. On an

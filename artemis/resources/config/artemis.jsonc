@@ -132,6 +132,16 @@
   // 4. Runtime Mode & Agent Capabilities Configuration (Dual-Engine: Flash vs. Pro)
   // ------------------------------------------------------------------------------
   "agent": {
+    // Optional plugin permission only: explicit user Yuri request + successful ping are still required.
+    "yuri": {
+      "enabled": false,
+      "allowed_tools": null, // null = queries/OCR clicks; destructive/root/native UI tools require an explicit list
+      "identity": "shell", // shell | su_brt | su; never automatically escalated
+      "compatible_versions": ["1.8.6"],
+      "rpc_timeout_ms": 30000,
+      "job_timeout_s": 120,
+      "poll_interval_s": 1
+    },
     // ==========================================================================
     // ⚡ 4.1 FLASH Profile Options (Reactive Single-Agent Lightweight Loop)
     // ==========================================================================

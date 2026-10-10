@@ -26,6 +26,7 @@ from artemis.config.constants import (
     ExplorerVersion,
 )
 from artemis.config.paths import ROOT_DIR, get_config_path
+from artemis.config.yuri import YuriConfig
 from artemis.llm.google import VideoProcessing
 from third_party.mobile_use.utils.file import load_jsonc
 from third_party.mobile_use.utils.logger import get_logger
@@ -856,6 +857,8 @@ class ProProfileConfig(BaseModel):
 
 class AgentGlobalConfig(BaseModel):
     """Global configuration parsed from artemis.jsonc / agent_config.json."""
+
+    yuri: YuriConfig = Field(default_factory=YuriConfig)
 
     # ⚡ Profile-categorized configurations
     flash: FlashProfileConfig = Field(

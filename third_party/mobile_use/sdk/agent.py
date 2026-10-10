@@ -66,6 +66,7 @@ from artemis.data_engine.trace import DataEngineCallbackHandler
 from artemis.graph.graph import get_graph
 from artemis.graph.state import State
 from artemis.runtime import DeviceExecutionLock
+from artemis.runtime.yuri_activation import prepare_task_yuri
 from artemis.sdk.run_outcome import attach_test_summary, resolve_trace_suffix
 from artemis.sdk.types.agent import AgentConfig
 from artemis.utils.startup_progress import publish_startup_progress
@@ -529,6 +530,7 @@ class AgentBase:
                 await self._prepare_device_environment(context=context)
                 await self._prepare_app_lock(task=task, context=context)
                 async with context:
+                    await prepare_task_yuri(context, request.goal, request.profile)
                     recording_started = False
                     if self._config.video_recording_tools_enabled:
                         try:

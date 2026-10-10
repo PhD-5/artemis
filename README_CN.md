@@ -252,6 +252,41 @@ if __name__ == "__main__":
 * **开发者命令行 CLI (`uv run artemis run`)**：支持通过终端直接执行自动化测试用例、探索性稳定性巡检或 AndroidWorld 基准评测，提供高保真结构化终端输出；
 * **Python SDK**：作为标准 Python 库集成至现有自动化测试框架（如 pytest）或 CI/CD 流水线，提供基于 Pydantic 的强类型结构化结果与断言支持。
 
+### 可选 Yuri 设备插件（Flash / Pro）
+
+Yuri 插件补充 OCR、设备配置、应用数据管理、代理及 root RPC，保留原有 Android UI 操作链路。**普通任务不加载插件、不探测 Yuri、不增加 Yuri 工具**；设备安装了 YuriClient 也不会自动启用。
+
+启用须同时满足：配置允许、原始用户任务明确要求使用 Yuri、当前目标设备的只读 RPC `ping` 成功且版本兼容。否定指令、引用、代码示例、页面及工具输出不能启用插件；启用状态不跨任务继承。
+
+在 `config/artemis.jsonc` 的 `agent` 中设置：
+
+```json
+"yuri": {
+  "enabled": true,
+  "allowed_tools": ["yuri_ping", "yuri_app_is_installed", "yuri_find_text", "yuri_click_text", "yuri_job_poll"],
+  "identity": "shell",
+  "compatible_versions": ["1.8.6"]
+}
+```
+
+任务示例：`使用 Yuri 检查 com.example.app 是否已安装`，或 `通过 Yuri 的 OCR 找到登录按钮`。仅开启配置而未明确请求 Yuri 时，仍走原有流程。SDK 可通过 `AgentConfigBuilder.with_yuri(YuriConfig(...))` 配置；`YuriConfig` 位于 `artemis.config.yuri`。UI、CLI、MCP 和 SDK 共用任务启动门控。
+
+* **设备准备**：自行安装并启动兼容的 YuriClient，保证 `yuri.rpc` 服务就绪及 ROM/SELinux 权限允许连接。ARTEMIS 不自动安装、启动、重启或提权来修复 probe；请求 Yuri 但服务不可用时明确失败，不静默替换能力。分发包的 `yuri` 是宿主机 wrapper，插件直接调用已安装 APK 的 Java CLI，不向手机推送脚本。
+* **能力权限**：`allowed_tools: null` 使用查询与 OCR 点击集合；`[]` 不允许任何工具。改机、reset、安装/卸载、清数据、备份/恢复、settings 写入、代理、root shell 及重复的原生 UI RPC 需显式列入白名单。定义与参数见 `artemis/tools/yuri.py`；角色 `denylisted_tools` 同时约束声明和直接执行。改机/reset 还要求有效的 `ro.yuri.rom.version`。
+* **执行语义**：查询 `false`、OCR 未命中 `null` 是正常答案；动作 `false`、shell 非零状态、Job `failed` 或 `done/false` 是失败。Yuri 变更单次派发、独占一个动作回合，不进入快速 burst，也不自动重试；系统操作使用参数和设备能力前置条件，不套用 UI 像素检查。
+* **长任务**：拿到提交回执后有界轮询至完成。轮询超时保留任务专属 `job_id` 和结果未知状态，可用 `yuri_job_poll` 继续查询，启用 Job 能力时也应允许此工具。提交阶段若未收到回执，则无法取得 handle，端上是否执行仍未知，不能自动重提。Yuri 重启、换设备或换任务后旧 handle 无效；取消 ARTEMIS 不代表端上 Job 已取消。
+  Job 绑定 PID、启动 tick 和可执行映像地址范围，不使用改机会虚拟化的 `boot_id`。若 ROM 隐藏这些进程元数据，必须显式配置 `identity: "su_brt"` 或 `"su"`；元数据不可验证时在提交前失败，不自动提权。
+* **参数与制品**：OCR 点/词框输出统一为设备像素坐标；截图取回宿主机制品路径，app-private 文件可能要求显式 root 身份。安装支持安全的设备路径或无 query/fragment 的 HTTP(S) APK/XAPK URL。Yuri 内部存在 shell 字符串拼接，因此相关参数拒绝不安全字符，不能以 JSON 转义代替端上安全性。备份返回成功仅表示 Yuri 调用返回，仍需独立验证归档完整性。
+* **真机端到端验收**：`scripts/yuri_real_device_acceptance.py` 使用实际配置的模型，通过生产 `Agent.run_task(profile="flash"/"pro")` 执行代理、改机和普通任务六个场景，不 mock 模型或 RPC。除了任务完成状态，还检查执行记录中确实出现 Yuri 动作、实际出口 IP、目标应用 UID 可见的属性，以及普通任务没有 Yuri probe/RPC。root UID 的真实属性和缓存 profile 都不能单独证明改机生效。
+  在已启动 Yuri 1.8.6、已有 `sec.prop`、支持 `su_brt` 且可联网的设备上运行：
+  ```bash
+  uv run --no-sync python scripts/yuri_real_device_acceptance.py \
+    --device-id SERIAL --modes flash pro --output-dir traces/yuri-acceptance \
+    --proxy-url-file /private/path/to/ss-uri.txt
+  ```
+  输入文件包含 SS URI；支持此次验证的 simple-obfs HTTP/TLS 节点。脚本临时使用无 TUN 的回环 SOCKS 模板和 Yuri UID 代理，并将 profile、代理文件、时区和时间设置恢复至测试前状态，不调用全局 NAT flush。`restore.json` 保存恢复数据；异常中断后可用同一输出目录及 `--restore-only` 恢复。报告含真实 session、执行记录、截图及 Checker 结论；Checker inconclusive 会单独标明，设备侧验收不冒充 Checker 通过。输入、恢复数据及正常 agent traces 可能包含凭据，应使用私有目录保存。
+
+
 <a id="on-device-helper"></a>
 ## ARTEMIS 会在手机上安装什么
 

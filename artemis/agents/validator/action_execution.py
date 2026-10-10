@@ -27,6 +27,7 @@ from artemis.context import ArtemisContext
 from artemis.graph.state import State
 from artemis.mcp.action_names import to_canonical_call
 from artemis.mcp.action_session import ActionSession
+from artemis.runtime.yuri_activation import active_yuri
 from third_party.mobile_use.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +76,13 @@ async def exec_action(
     the structured ``ActionResult.ok`` -- no string parsing.
     """
     action_name = action_item.get("action")
+    plugin = active_yuri(ctx)
+    if plugin is not None and action_name in plugin.specs:
+        if action_name not in plugin.action_names("validator"):
+            return False, f"Yuri action '{action_name}' is not permitted."
+        payload = await plugin.call(session, action_name, action_item.get("args", {}), "validator")
+        action_item["yuri_result"] = payload
+        return payload["ok"], payload["message"]
 
     if action_name == "wait_for_delay":
         time_in_ms = action_item.get("time_in_ms", 0)
