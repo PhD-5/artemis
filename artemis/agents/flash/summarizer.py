@@ -168,9 +168,13 @@ class VisualStepSummarizer(StepMemoryService):
             if model_name:
                 self._llm = get_google_llm(model_name=target_model, temperature=0.0)
             else:
-                self._llm = get_llm(ctx, name="summarizer", is_utils=True)
-        except Exception:
-            self._llm = get_google_llm(model_name=target_model, temperature=0.0)
+                self._llm = get_llm(ctx, name="summarizer")
+        except Exception as exc:
+            logger.warning(
+                f"Google-native summarizer path unavailable ({exc}); "
+                "falling back to the summarizer role from LLM config."
+            )
+            self._llm = get_llm(ctx, name="summarizer")
         try:
             configured = getattr(self._llm, "model", None) or getattr(self._llm, "model_name", None)
             if isinstance(configured, str) and configured:

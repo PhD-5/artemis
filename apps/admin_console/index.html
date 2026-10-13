@@ -239,11 +239,32 @@
     <div id="sidebar">
         <h2>Run Task</h2>
         <div style="margin-bottom: 20px;">
-            <textarea id="task-goal" style="width: 100%; height: 60px; border-radius: 4px; border: 1px solid #e2e8f0; padding: 8px; box-sizing: border-box; font-family: inherit;" placeholder="Enter task goal..."></textarea>
+            <div style="font-size: 0.85rem; color: #475569; margin-bottom: 8px;">
+                <label for="task-mode-select" style="font-weight: 600;">Execution Mode:</label>
+                <select id="task-mode-select" onchange="changeTaskMode()" style="width: 100%; margin-top: 4px; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e0; background: #f8fafc; color: #334155;">
+                    <option value="raw">Manual goal</option>
+                    <option value="template">Task template</option>
+                </select>
+            </div>
+            <div id="task-raw-fields">
+                <textarea id="task-goal" style="width: 100%; height: 60px; border-radius: 4px; border: 1px solid #e2e8f0; padding: 8px; box-sizing: border-box; font-family: inherit;" placeholder="Enter task goal..."></textarea>
+            </div>
+            <div id="task-template-fields" style="display: none; font-size: 0.85rem; color: #475569;">
+                <label for="task-template-select" style="font-weight: 600;">Template:</label>
+                <select id="task-template-select" onchange="changeTaskTemplate()" style="width: 100%; margin-top: 4px; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e0; background: #f8fafc; color: #334155;">
+                    <option value="">Loading templates...</option>
+                </select>
+                <button type="button" onclick="loadTaskCatalog()" style="background: none; border: none; color: #3182ce; cursor: pointer; padding: 4px 0;">Refresh templates</button>
+                <div id="task-catalog-status" role="status"></div>
+                <div id="task-parameters"></div>
+                <label for="task-preview" style="display: block; font-weight: 600; margin-top: 8px;">Rendered prompt preview:</label>
+                <textarea id="task-preview" readonly style="width: 100%; height: 100px; margin-top: 4px; border-radius: 4px; border: 1px solid #e2e8f0; padding: 8px; box-sizing: border-box; font-family: inherit; background: #f8fafc; color: #334155;"></textarea>
+            </div>
             <div style="margin-top: 8px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem; color: #475569;">
                 <label for="task-profile-select" style="font-weight: 600;">Agent Architecture:</label>
-                <select id="task-profile-select" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e0; font-size: 0.85rem; background-color: #f8fafc; color: #334155; outline: none; cursor: pointer; flex: 1; margin-left: 10px;">
-                    <option value="flash">⚡ Flash (Reactive Fast Loop)</option>
+                <select id="task-profile-select" onchange="changeTaskProfile()" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e0; font-size: 0.85rem; background-color: #f8fafc; color: #334155; outline: none; cursor: pointer; flex: 1; margin-left: 10px; min-width: 0;">
+                    <option value="" id="task-profile-inherit" hidden>Use template architecture</option>
+                    <option value="flash" selected>⚡ Flash (Reactive Fast Loop)</option>
                     <option value="pro">🚀 Pro (Multi-Agent Cognitive Graph)</option>
                 </select>
             </div>
@@ -1119,34 +1140,179 @@
             }
         }
 
-        async function runTask() {
-            const goal = document.getElementById('task-goal').value;
-            const profileElement = document.getElementById('task-profile-select');
-            const profile = profileElement ? profileElement.value : 'flash';
-            const statusDiv = document.getElementById('run-status');
-            if (!goal) {
-                statusDiv.innerHTML = '<span style="color: #e53e3e;">Please enter a goal</span>';
+        let taskTemplates = [];
+        let selectedTaskTemplate = null;
+        let taskArgs = Object.create(null);
+        let rawTaskProfile = 'flash';
+        let taskCatalogRequest = 0;
+
+        function changeTaskProfile() {
+            if (document.getElementById('task-mode-select').value === 'raw') {
+                rawTaskProfile = document.getElementById('task-profile-select').value;
+            }
+        }
+
+        function changeTaskMode() {
+            const templateMode = document.getElementById('task-mode-select').value === 'template';
+            document.getElementById('task-raw-fields').style.display = templateMode ? 'none' : 'block';
+            document.getElementById('task-template-fields').style.display = templateMode ? 'block' : 'none';
+            const profile = document.getElementById('task-profile-select');
+            document.getElementById('task-profile-inherit').hidden = !templateMode;
+            if (templateMode) {
+                profile.value = '';
+            } else {
+                document.getElementById('task-template-select').value = '';
+                changeTaskTemplate();
+                profile.value = rawTaskProfile;
+            }
+            document.getElementById('run-status').textContent = '';
+        }
+
+        async function loadTaskCatalog() {
+            const request = ++taskCatalogRequest;
+            const status = document.getElementById('task-catalog-status');
+            status.textContent = 'Loading templates...';
+            try {
+                const response = await fetch('/api/tasks/catalog');
+                if (!response.ok) throw new Error(`Catalog request failed (${response.status})`);
+                const catalog = await response.json();
+                if (!Array.isArray(catalog.tasks)) throw new Error('Invalid task catalog');
+                if (request !== taskCatalogRequest) return;
+                taskTemplates = catalog.tasks;
+                const selector = document.getElementById('task-template-select');
+                selector.replaceChildren();
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Select a template';
+                selector.appendChild(placeholder);
+                for (const task of taskTemplates) {
+                    const option = document.createElement('option');
+                    option.value = task.id;
+                    option.textContent = task.title;
+                    selector.appendChild(option);
+                }
+                changeTaskTemplate();
+                status.textContent = taskTemplates.length ? '' : 'No templates available.';
+            } catch (error) {
+                if (request === taskCatalogRequest) {
+                    status.textContent = `Could not load templates: ${error.message}`;
+                }
+            }
+        }
+
+        function changeTaskTemplate() {
+            const id = document.getElementById('task-template-select').value;
+            selectedTaskTemplate = taskTemplates.find(task => task.id === id) || null;
+            taskArgs = Object.create(null);
+            const fields = document.getElementById('task-parameters');
+            fields.replaceChildren();
+            document.getElementById('task-profile-select').value =
+                document.getElementById('task-mode-select').value === 'template' ? '' : rawTaskProfile;
+            const inherit = document.getElementById('task-profile-inherit');
+            inherit.textContent = selectedTaskTemplate
+                ? `Use template architecture (${selectedTaskTemplate.profile})`
+                : 'Use template architecture';
+            if (selectedTaskTemplate) {
+                for (const name of selectedTaskTemplate.parameters || []) {
+                    const field = document.createElement('div');
+                    field.style.marginTop = '8px';
+                    const label = document.createElement('label');
+                    label.textContent = name;
+                    label.style.display = 'block';
+                    label.style.fontWeight = '600';
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.placeholder = `Enter ${name} (empty is allowed)`;
+                    input.style.cssText = 'width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px;';
+                    input.addEventListener('input', () => {
+                        taskArgs[name] = input.value;
+                        updateTaskPreview();
+                    });
+                    label.appendChild(input);
+                    field.appendChild(label);
+                    fields.appendChild(field);
+                }
+            }
+            updateTaskPreview();
+            document.getElementById('run-status').textContent = '';
+        }
+
+        function updateTaskPreview() {
+            const preview = document.getElementById('task-preview');
+            if (!selectedTaskTemplate) {
+                preview.value = '';
                 return;
             }
-            statusDiv.innerHTML = '<span style="color: #d69e2e;">Starting task...</span>';
+            // One pass: inserted argument values are never interpreted as template tokens.
+            preview.value = selectedTaskTemplate.goal.replace(/\$\$\{[^}]*\}|\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (token, name) => {
+                if (token.startsWith('$$')) return token.slice(1);
+                return Object.prototype.hasOwnProperty.call(taskArgs, name) ? taskArgs[name] : token;
+            });
+        }
+
+        function taskErrorDetail(detail) {
+            if (Array.isArray(detail)) {
+                return detail.map(item => {
+                    if (typeof item === 'string') return item;
+                    const location = Array.isArray(item.loc) ? item.loc.join('.') : '';
+                    return `${location ? location + ': ' : ''}${item.msg || JSON.stringify(item)}`;
+                }).join('; ');
+            }
+            if (typeof detail === 'string') return detail;
+            return detail ? JSON.stringify(detail) : 'Unknown error';
+        }
+
+        async function runTask() {
+            const templateMode = document.getElementById('task-mode-select').value === 'template';
+            const statusDiv = document.getElementById('run-status');
+            let payload;
+            if (templateMode) {
+                if (!selectedTaskTemplate) {
+                    statusDiv.textContent = 'Please select a template';
+                    statusDiv.style.color = '#e53e3e';
+                    return;
+                }
+                const missing = (selectedTaskTemplate.parameters || []).filter(
+                    name => !Object.prototype.hasOwnProperty.call(taskArgs, name)
+                );
+                if (missing.length) {
+                    statusDiv.textContent = `Please enter: ${missing.join(', ')} (empty values are allowed)`;
+                    statusDiv.style.color = '#e53e3e';
+                    return;
+                }
+                payload = { template_id: selectedTaskTemplate.id, args: { ...taskArgs } };
+                const profile = document.getElementById('task-profile-select').value;
+                if (profile) payload.profile = profile;
+            } else {
+                const goal = document.getElementById('task-goal').value;
+                if (!goal) {
+                    statusDiv.textContent = 'Please enter a goal';
+                    statusDiv.style.color = '#e53e3e';
+                    return;
+                }
+                payload = { goal, profile: document.getElementById('task-profile-select').value };
+            }
+            statusDiv.textContent = 'Starting task...';
+            statusDiv.style.color = '#d69e2e';
             try {
                 const res = await fetch('/api/run', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ goal: goal, profile: profile })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    statusDiv.innerHTML = `<span style="color: #38a169;">Task started!</span>`;
-                    document.getElementById('task-goal').value = '';
+                    statusDiv.textContent = 'Task started!';
+                    statusDiv.style.color = '#38a169';
+                    if (!templateMode) document.getElementById('task-goal').value = '';
                     setTimeout(loadSessions, 2000);
                 } else {
-                    statusDiv.innerHTML = `<span style="color: #e53e3e;">Failed: ${escapeHtml(data.detail || 'Unknown error')}</span>`;
+                    statusDiv.textContent = `Failed: ${taskErrorDetail(data.detail)}`;
+                    statusDiv.style.color = '#e53e3e';
                 }
             } catch (err) {
-                statusDiv.innerHTML = `<span style="color: #e53e3e;">Error: ${escapeHtml(err.message)}</span>`;
+                statusDiv.textContent = `Error: ${err.message}`;
+                statusDiv.style.color = '#e53e3e';
             }
         }
 
@@ -3705,6 +3871,7 @@
 
         // Initial load
         loadSessions();
+        loadTaskCatalog();
     </script>
     
     <!-- Image Zoom Modal -->

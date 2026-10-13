@@ -40,6 +40,13 @@ ExplorerMode = Literal["flash", "pro", "ultra"]
 EXPLORER_MODES: tuple[str, ...] = ("flash", "pro", "ultra")
 
 
+class _Omitted:
+    """Distinguish an omitted output override from an explicit null."""
+
+
+_OMITTED = _Omitted()
+
+
 def _normalize_choice(value: str | None, name: str, choices: tuple[str, ...]) -> str | None:
     """Strip + lower-case an enumerated option, rejecting unknown values early."""
     if value is None:
@@ -174,11 +181,13 @@ class ArtemisClient:
 
     async def submit(
         self,
-        goal: str,
+        goal: str | None = None,
         *,
+        template_id: str | None = None,
+        args: Mapping[str, str] | None = None,
         profile: Literal["flash", "pro"] | None = None,
         device_serial: str | None = None,
-        expected_output: str | None = None,
+        expected_output: str | None | _Omitted = _OMITTED,
         enable_outputter: bool | None = None,
         locked_app_package: str | None = None,
         app_path: str | None = None,
@@ -190,6 +199,11 @@ class ArtemisClient:
     ) -> TaskHandle:
         """Submit one task and return immediately after scheduler admission.
 
+        Supply either a raw ``goal`` or a saved ``template_id`` with string
+        ``args``. Template rendering belongs to the server; an omitted profile
+        inherits the template profile, while raw goals use ``default_profile``.
+        Omitting ``expected_output`` inherits its template value; explicitly
+        passing ``None`` or ``""`` clears it in template mode.
         ``task_id`` is generated client-side and sent as the legacy
         ``session_id``. Reusing it makes submission retries idempotent.
         ``verification_level`` (``off`` | ``final`` | ``checkpoints`` |
@@ -198,9 +212,25 @@ class ArtemisClient:
         perception depth) are Pro-only tuning knobs; the Flash profile ignores
         them. Experimental, forward-compatible fields belong in ``options``.
         """
-        normalized_goal = goal.strip()
-        if not normalized_goal:
-            raise ValueError("goal must not be empty")
+        if goal is None and template_id is None:
+            raise ValueError("provide a non-empty goal or template_id")
+        if goal is not None:
+            if not isinstance(goal, str) or not goal.strip():
+                raise ValueError("goal must be a non-empty string")
+            if template_id is not None:
+                raise ValueError("goal and template_id are mutually exclusive")
+        if template_id is not None and (
+            not isinstance(template_id, str) or not template_id.strip()
+        ):
+            raise ValueError("template_id must be a non-empty string")
+        if args is not None:
+            if template_id is None:
+                raise ValueError("args requires template_id")
+            if not isinstance(args, Mapping) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in args.items()
+            ):
+                raise ValueError("args must be a mapping of string names to string values")
         resolved_level = _normalize_choice(
             verification_level, "verification_level", VERIFICATION_LEVELS
         )
@@ -212,17 +242,21 @@ class ArtemisClient:
                 resolved_task_id = str(uuid.UUID(task_id))
             except (AttributeError, TypeError, ValueError) as exc:
                 raise ValueError("task_id must be a valid UUID string") from exc
-        resolved_profile = profile or self.default_profile
         resolved_device = device_serial or self.device_serial
         payload: dict[str, Any] = {
-            "goal": normalized_goal,
-            "profile": resolved_profile,
             "session_id": resolved_task_id,
             "ingress": "python_sdk",
         }
+        if template_id is not None:
+            payload["template_id"] = template_id
+            payload["args"] = dict(args) if args is not None else {}
+            if profile is not None:
+                payload["profile"] = profile
+        else:
+            payload["goal"] = goal.strip()
+            payload["profile"] = profile or self.default_profile
         optional_values = {
             "device_serial": resolved_device,
-            "expected_output": expected_output,
             "enable_outputter": enable_outputter,
             "locked_app_package": locked_app_package,
             "app_path": app_path,
@@ -232,6 +266,8 @@ class ArtemisClient:
             "options": dict(options) if options is not None else None,
         }
         payload.update({key: value for key, value in optional_values.items() if value is not None})
+        if expected_output is not _OMITTED and (template_id is not None or expected_output is not None):
+            payload["expected_output"] = expected_output
 
         response = self._mapping(
             await self._request("POST", "/api/run", json_body=payload),
@@ -294,11 +330,13 @@ class ArtemisClient:
 
     async def run(
         self,
-        goal: str,
+        goal: str | None = None,
         *,
+        template_id: str | None = None,
+        args: Mapping[str, str] | None = None,
         profile: Literal["flash", "pro"] | None = None,
         device_serial: str | None = None,
-        expected_output: str | None = None,
+        expected_output: str | None | _Omitted = _OMITTED,
         enable_outputter: bool | None = None,
         locked_app_package: str | None = None,
         app_path: str | None = None,
@@ -313,6 +351,8 @@ class ArtemisClient:
         """Submit a task and wait for its terminal result (see :meth:`submit`)."""
         handle = await self.submit(
             goal,
+            template_id=template_id,
+            args=args,
             profile=profile,
             device_serial=device_serial,
             expected_output=expected_output,
@@ -334,14 +374,18 @@ class ArtemisClient:
     async def run_task(self, task: Any, **overrides: Any) -> TaskResult:
         """Run a task-like object while delegating all execution remotely."""
         goal = getattr(task, "goal", None)
-        if not isinstance(goal, str) or not goal.strip():
-            raise ValueError("task must expose a non-empty goal attribute")
+        template_id = getattr(task, "template_id", None)
         values: dict[str, Any] = {
-            "profile": getattr(task, "profile", None),
+            "template_id": template_id,
+            "args": getattr(task, "args", None),
             "device_serial": getattr(task, "device_serial", None)
             or getattr(task, "device_id", None),
             "locked_app_package": getattr(task, "locked_package", None),
         }
+        profile = getattr(task, "profile", None)
+        fields_set = getattr(task, "model_fields_set", None)
+        if template_id is None or fields_set is None or "profile" in fields_set:
+            values["profile"] = profile
         values.update(overrides)
         return await self.run(goal, **values)
 

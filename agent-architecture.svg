@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1270" viewBox="0 0 1600 1270" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, Hiragino Sans GB, sans-serif">
+  <defs>
+    <marker id="arrGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5F6368"/>
+    </marker>
+    <marker id="arrPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8430CE"/>
+    </marker>
+    <marker id="arrTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#00796B"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="1270" fill="#FDFDFD"/>
+  <text x="800" y="34" text-anchor="middle" font-size="23" font-weight="700" fill="#202124">ARTEMIS 完整 Agent 架构 — MCP 的角色：异步委派入口 + 治理面</text>
+  <text x="800" y="56" text-anchor="middle" font-size="12.5" fill="#5F6368">MCP 不在执行内核里：它把 IDE 对话中的长任务剥离为后台 trace，经 Daemon 调度给 Worker 进程执行，再以通知唤醒 + 取证工具闭环</text>
+
+  <!-- ══════════ Row A: 入口层 ══════════ -->
+  <text x="50" y="86" font-size="13" font-weight="700" fill="#1A73E8">入口层 (Ingress)</text>
+  <g>
+    <rect x="50" y="96" width="340" height="86" rx="10" fill="#E8F0FE" stroke="#1A73E8" stroke-width="1.5"/>
+    <text x="220" y="120" text-anchor="middle" font-size="14" font-weight="700" fill="#174EA6">IDE AI 编程助手</text>
+    <text x="220" y="140" text-anchor="middle" font-size="11" fill="#3C4043">Antigravity · Claude Code · Cursor · Codex · Windsurf</text>
+    <text x="220" y="158" text-anchor="middle" font-size="11" fill="#3C4043">+ 挂载 rules.md 移动测试思维准则</text>
+
+    <rect x="410" y="96" width="340" height="86" rx="10" fill="#E8F0FE" stroke="#1A73E8" stroke-width="1.5"/>
+    <text x="580" y="120" text-anchor="middle" font-size="14" font-weight="700" fill="#174EA6">Web 控制台</text>
+    <text x="580" y="140" text-anchor="middle" font-size="11" fill="#3C4043">Angular Showcase UI + Admin Console</text>
+    <text x="580" y="158" text-anchor="middle" font-size="11" fill="#3C4043">artemis ui → http://localhost:8000</text>
+
+    <rect x="770" y="96" width="340" height="86" rx="10" fill="#E8F0FE" stroke="#1A73E8" stroke-width="1.5"/>
+    <text x="940" y="120" text-anchor="middle" font-size="14" font-weight="700" fill="#174EA6">CLI (typer)</text>
+    <text x="940" y="140" text-anchor="middle" font-size="11" fill="#3C4043">run · batch · trace · doctor · helper · init · mcp</text>
+    <text x="940" y="158" text-anchor="middle" font-size="11" fill="#3C4043">run 优先路由 Daemon，失败回退本地执行</text>
+
+    <rect x="1130" y="96" width="410" height="86" rx="10" fill="#E8F0FE" stroke="#1A73E8" stroke-width="1.5"/>
+    <text x="1335" y="120" text-anchor="middle" font-size="14" font-weight="700" fill="#174EA6">Python SDK</text>
+    <text x="1335" y="140" text-anchor="middle" font-size="11" fill="#3C4043">artemis-client 零依赖 HTTP 薄客户端</text>
+    <text x="1335" y="158" text-anchor="middle" font-size="11" fill="#3C4043">client.run(goal) → 集成 pytest / CI/CD</text>
+  </g>
+
+  <!-- A→B arrows -->
+  <line x1="200" y1="182" x2="200" y2="200" stroke="#8430CE" stroke-width="2.5" marker-end="url(#arrPurple)" marker-start="url(#arrPurple)"/>
+  <text x="160" y="196" text-anchor="end" font-size="10.5" fill="#8430CE" font-weight="600">stdio JSON-RPC</text>
+  <line x1="310" y1="200" x2="310" y2="182" stroke="#8430CE" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arrPurple)"/>
+  <text x="322" y="196" font-size="10" fill="#8430CE">完成唤醒(Reactive Wakeup)</text>
+  <line x1="660" y1="182" x2="840" y2="200" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="940" y1="182" x2="940" y2="200" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="1335" y1="182" x2="1335" y2="200" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+  <text x="1240" y="196" text-anchor="end" font-size="10.5" fill="#5F6368">HTTP 提交 / 状态 / 回放</text>
+
+  <!-- ══════════ Row B1: MCP Server ══════════ -->
+  <rect x="50" y="200" width="680" height="250" rx="12" fill="#F6EDFF" stroke="#8430CE" stroke-width="3"/>
+  <text x="70" y="226" font-size="15" font-weight="700" fill="#5B21A8">MCP Server — FastMCP · stdio（python -m mcp_server / artemis mcp）</text>
+  <text x="70" y="245" font-size="10.5" fill="#7C3AED">仅提供 tools（无 resources / prompts）· sse 可选 :8001 · stderr tee 不破坏 JSON-RPC</text>
+  <g>
+    <rect x="70" y="256" width="300" height="44" rx="7" fill="#FAF5FF" stroke="#A855F7"/>
+    <text x="82" y="273" font-size="11" font-weight="700" fill="#6B21A8">mobile_run_task</text>
+    <text x="82" y="289" font-size="9.5" fill="#5B5660">异步委派任务 → 立即返回 trace_id（非阻塞）</text>
+
+    <rect x="410" y="256" width="300" height="44" rx="7" fill="#FAF5FF" stroke="#A855F7"/>
+    <text x="422" y="273" font-size="11" font-weight="700" fill="#6B21A8">mobile_manage_task</text>
+    <text x="422" y="289" font-size="9.5" fill="#5B5660">status 对账 / inject_instruction 纠偏 / stop</text>
+
+    <rect x="70" y="306" width="300" height="44" rx="7" fill="#FAF5FF" stroke="#A855F7"/>
+    <text x="82" y="323" font-size="11" font-weight="700" fill="#6B21A8">mobile_get_device_state</text>
+    <text x="82" y="339" font-size="9.5" fill="#5B5660">实时截图 / OCR+XML 元素层级（只读直连设备）</text>
+
+    <rect x="410" y="306" width="300" height="44" rx="7" fill="#FAF5FF" stroke="#A855F7"/>
+    <text x="422" y="323" font-size="11" font-weight="700" fill="#6B21A8">mobile_inspect_trace</text>
+    <text x="422" y="339" font-size="9.5" fill="#5B5660">summary / search / 逐步截图与上下文取证</text>
+
+    <rect x="70" y="356" width="300" height="44" rx="7" fill="#FAF5FF" stroke="#A855F7"/>
+    <text x="82" y="373" font-size="11" font-weight="700" fill="#6B21A8">mobile_diagnose</text>
+    <text x="82" y="389" font-size="9.5" fill="#5B5660">环境自诊 + attempt_fix 自愈 + 验 key / 探设备</text>
+
+    <rect x="410" y="356" width="300" height="44" rx="7" fill="#F3E8FF" stroke="#8430CE" stroke-dasharray="4 3"/>
+    <text x="422" y="373" font-size="11" font-weight="700" fill="#6B21A8">Notifiers 多通道通知</text>
+    <text x="422" y="389" font-size="9.5" fill="#5B5660">AgentAPI 唤醒 · 桌面 toast · Webhook · 脚本钩子</text>
+  </g>
+  <text x="70" y="420" font-size="10.5" fill="#6B21A8">后台 spawn runner + 60s watchdog · 与控制台/CLI 共享 trace_store · 显式 serial 未授权即拒绝</text>
+  <text x="70" y="438" font-size="12" font-weight="700" fill="#8430CE">角色：治理面 — 不执行任何智能体步骤，只委派、观测、纠偏、取证、自诊</text>
+
+  <!-- ══════════ Row B2: Daemon ══════════ -->
+  <rect x="790" y="200" width="750" height="250" rx="12" fill="#E0F2F1" stroke="#00796B" stroke-width="2"/>
+  <text x="810" y="226" font-size="15" font-weight="700" fill="#004D40">Artemis Daemon — 统一调度服务 (:8000)</text>
+  <text x="810" y="245" font-size="10.5" fill="#00695C">Web / CLI / SDK / MCP 的共同后端 · 任务队列与 Worker 进程管理</text>
+  <g>
+    <rect x="810" y="256" width="350" height="56" rx="7" fill="#E8F5F4" stroke="#26A69A"/>
+    <text x="822" y="277" font-size="11.5" font-weight="700" fill="#004D40">device_pool 设备池</text>
+    <text x="822" y="295" font-size="9.5" fill="#33691E">自动分配空闲设备 · 多设备并行</text>
+
+    <rect x="1180" y="256" width="350" height="56" rx="7" fill="#E8F5F4" stroke="#26A69A"/>
+    <text x="1192" y="277" font-size="11.5" font-weight="700" fill="#004D40">DeviceExecutionLock</text>
+    <text x="1192" y="295" font-size="9.5" fill="#33691E">每设备 FIFO 互斥 · 队列票据 · 死锁清理</text>
+
+    <rect x="810" y="326" width="350" height="56" rx="7" fill="#E8F5F4" stroke="#26A69A"/>
+    <text x="822" y="347" font-size="11.5" font-weight="700" fill="#004D40">trace_store 状态账本</text>
+    <text x="822" y="365" font-size="9.5" fill="#33691E">status.json 生命周期 · 三方共享事实源</text>
+
+    <rect x="1180" y="326" width="350" height="56" rx="7" fill="#E8F5F4" stroke="#26A69A"/>
+    <text x="1192" y="347" font-size="11.5" font-weight="700" fill="#004D40">Worker 进程管理</text>
+    <text x="1192" y="365" font-size="9.5" fill="#33691E">按锁出队 spawn · 取消标记 · 孤儿会话对账</text>
+  </g>
+  <text x="810" y="414" font-size="10.5" fill="#004D40">设备严格校验（未授权/不在位直接拒绝）· 任务取消经 marker 文件路由到 Worker 的 Ctrl-C 等价路径</text>
+  <text x="810" y="432" font-size="10.5" fill="#004D40">运行前检查：安全锁屏拒绝（不猜 PIN）· 可选强制 Chrome/WebView 无障碍</text>
+
+  <!-- B1→B2 -->
+  <line x1="730" y1="330" x2="790" y2="330" stroke="#8430CE" stroke-width="2.5" marker-end="url(#arrPurple)"/>
+  <text x="760" y="322" text-anchor="middle" font-size="10" fill="#8430CE" font-weight="600">submit</text>
+
+  <!-- B→C arrows -->
+  <line x1="1165" y1="450" x2="1165" y2="490" stroke="#00796B" stroke-width="3" marker-end="url(#arrTeal)"/>
+  <text x="1180" y="474" font-size="11" fill="#00796B" font-weight="600">按设备锁出队 → 拉起 Worker 子进程</text>
+  <line x1="250" y1="450" x2="250" y2="490" stroke="#8430CE" stroke-width="2" stroke-dasharray="6 3" marker-end="url(#arrPurple)"/>
+  <text x="264" y="474" font-size="10.5" fill="#8430CE">standalone：Daemon 不可用时直接 spawn runner</text>
+
+  <!-- ══════════ Row C: Agent Worker 执行内核 ══════════ -->
+  <rect x="50" y="490" width="1490" height="340" rx="12" fill="#FFF8F0" stroke="#E65100" stroke-width="2"/>
+  <text x="70" y="514" font-size="15" font-weight="700" fill="#BF360C">Agent Worker 进程（执行内核）— AgentBase</text>
+  <text x="70" y="532" font-size="11" fill="#D84315">Profile 路由：task.profile == "flash" → FlashRunner 响应式循环；否则 → Pro 多智能体图（LangGraph）</text>
+
+  <!-- Flash box -->
+  <rect x="70" y="545" width="420" height="195" rx="10" fill="#FFECDC" stroke="#EF6C00" stroke-width="2"/>
+  <text x="90" y="568" font-size="13.5" font-weight="700" fill="#E65100">FlashRunner 响应式循环（~3–5s/步）</text>
+  <text x="90" y="590" font-size="10.5" fill="#5D4037">· 单 LLM：观察 → 思考 → 执行，无图编排</text>
+  <text x="90" y="608" font-size="10.5" fill="#5D4037">· click_sequence 50ms 串击瞬态控件</text>
+  <text x="90" y="626" font-size="10.5" fill="#5D4037">· 历史压缩不限步 · search_history / replay_steps</text>
+  <text x="90" y="644" font-size="10.5" fill="#5D4037">· video_analyzer 按时段回溯会话录屏</text>
+  <text x="90" y="662" font-size="10.5" fill="#5D4037">· 无：计划 · 安全网 · Checker · ADB · 报告</text>
+  <text x="90" y="686" font-size="10.5" fill="#8D6E63">适合：确定性强、路径清晰的常规 UI 操作</text>
+  <text x="90" y="704" font-size="10.5" fill="#8D6E63">唤醒共用 TranscriptLedger（T+mm:ss 会话时钟）</text>
+
+  <!-- Pro graph row 1 -->
+  <text x="530" y="552" font-size="12.5" font-weight="700" fill="#BF360C">Pro 多智能体图（~15–40s/步）— 计划 · 执行 · 校验闭环</text>
+  <g>
+    <rect x="530" y="560" width="70" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="565" y="592" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">START</text>
+
+    <rect x="620" y="560" width="170" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="705" y="581" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Planner 计划</text>
+    <text x="705" y="600" text-anchor="middle" font-size="9.5" fill="#5D4037">里程碑 + verify/assert 检查项</text>
+
+    <rect x="810" y="560" width="150" height="54" rx="8" fill="#FFD180" stroke="#E65100" stroke-width="2"/>
+    <text x="885" y="581" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Convergence</text>
+    <text x="885" y="600" text-anchor="middle" font-size="9.5" fill="#5D4037">继续 / 结算 / 结束 门控</text>
+
+    <rect x="980" y="560" width="140" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="1050" y="581" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Perception 观察</text>
+    <text x="1050" y="600" text-anchor="middle" font-size="9.5" fill="#5D4037">截图 + 元素列表 [T+]</text>
+
+    <rect x="1140" y="560" width="290" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="1285" y="581" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Operator 执行</text>
+    <text x="1285" y="600" text-anchor="middle" font-size="9.5" fill="#5D4037">笔记 · ADB · 历史召回 · fast-action burst 连发</text>
+  </g>
+  <line x1="600" y1="587" x2="620" y2="587" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="790" y1="587" x2="810" y2="587" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="960" y1="587" x2="980" y2="587" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="1120" y1="587" x2="1140" y2="587" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+
+  <!-- Pro graph row 2 (right to left) -->
+  <g>
+    <rect x="1150" y="680" width="180" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="1240" y="701" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Execution Check</text>
+    <text x="1240" y="720" text-anchor="middle" font-size="9.5" fill="#5D4037">复核子目标 / 放行动作</text>
+
+    <rect x="930" y="680" width="200" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="1030" y="701" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Validator 安全网</text>
+    <text x="1030" y="720" text-anchor="middle" font-size="9.5" fill="#5D4037">XML 优先 + 像素兜底 · 双图校验</text>
+
+    <rect x="760" y="680" width="150" height="54" rx="8" fill="#FFE3CF" stroke="#E65100"/>
+    <text x="835" y="701" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">Summarizer</text>
+    <text x="835" y="720" text-anchor="middle" font-size="9.5" fill="#5D4037">步骤结构化总结</text>
+
+    <rect x="540" y="680" width="200" height="54" rx="8" fill="#FFD180" stroke="#E65100" stroke-width="2"/>
+    <text x="640" y="701" text-anchor="middle" font-size="12" font-weight="700" fill="#BF360C">exit_settlement</text>
+    <text x="640" y="720" text-anchor="middle" font-size="9.5" fill="#5D4037">Checker 结算 + 对照原始目标终审</text>
+  </g>
+  <line x1="1285" y1="614" x2="1285" y2="680" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="1150" y1="707" x2="1130" y2="707" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="930" y1="707" x2="910" y2="707" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="855" y1="680" x2="855" y2="614" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <path d="M 1240 680 V 656 H 890 V 614" fill="none" stroke="#E65100" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#arrGray)"/>
+  <text x="1065" y="650" font-size="9.5" fill="#BF360C">review_subgoals 复核</text>
+  <path d="M 812 614 V 644 H 640 V 680" fill="none" stroke="#E65100" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#arrGray)"/>
+  <text x="700" y="638" font-size="9.5" fill="#BF360C">全部完成 → 结算</text>
+  <line x1="640" y1="734" x2="640" y2="752" stroke="#E65100" stroke-width="2" marker-end="url(#arrGray)"/>
+  <text x="652" y="760" font-size="11" font-weight="700" fill="#BF360C">END</text>
+  <text x="1355" y="640" font-size="9.5" fill="#8D6E63">被拦/失败动作开 incident</text>
+  <text x="1355" y="654" font-size="9.5" fill="#8D6E63">常驻上下文直至成功</text>
+
+  <!-- Sub-agents strip -->
+  <text x="70" y="772" font-size="11.5" font-weight="700" fill="#F57F17">子智能体（Pro 全用 · Flash 可调 Explorer / Video Analyzer）</text>
+  <g>
+    <rect x="70" y="778" width="230" height="44" rx="7" fill="#FFFDE7" stroke="#F9A825"/>
+    <text x="185" y="795" text-anchor="middle" font-size="10.5" font-weight="700" fill="#795548">Explorer 元素定位</text>
+    <text x="185" y="811" text-anchor="middle" font-size="9" fill="#5D4037">flash=ER 1-shot · pro=3轮 · ultra=8轮深扫</text>
+
+    <rect x="310" y="778" width="230" height="44" rx="7" fill="#FFFDE7" stroke="#F9A825"/>
+    <text x="425" y="795" text-anchor="middle" font-size="10.5" font-weight="700" fill="#795548">ObjectDetector</text>
+    <text x="425" y="811" text-anchor="middle" font-size="9" fill="#5D4037">Gemini ER 像素坐标（硬约束，不可换）</text>
+
+    <rect x="550" y="778" width="230" height="44" rx="7" fill="#FFFDE7" stroke="#F9A825"/>
+    <text x="665" y="795" text-anchor="middle" font-size="10.5" font-weight="700" fill="#795548">Video Analyzer</text>
+    <text x="665" y="811" text-anchor="middle" font-size="9" fill="#5D4037">T+ 时段录屏问答 · 关键帧引擎</text>
+
+    <rect x="790" y="778" width="230" height="44" rx="7" fill="#FFFDE7" stroke="#F9A825"/>
+    <text x="905" y="795" text-anchor="middle" font-size="10.5" font-weight="700" fill="#795548">Step Summarizer</text>
+    <text x="905" y="811" text-anchor="middle" font-size="9" fill="#5D4037">后台视觉摘要 · 异步压缩历史</text>
+
+    <rect x="1030" y="778" width="230" height="44" rx="7" fill="#FFFDE7" stroke="#F9A825"/>
+    <text x="1145" y="795" text-anchor="middle" font-size="10.5" font-weight="700" fill="#795548">Outputter</text>
+    <text x="1145" y="811" text-anchor="middle" font-size="9" fill="#5D4037">output.md 结构化报告</text>
+
+    <rect x="1270" y="778" width="250" height="44" rx="7" fill="#FFFDE7" stroke="#F9A825"/>
+    <text x="1395" y="795" text-anchor="middle" font-size="10.5" font-weight="700" fill="#795548">Log Analyzer · Diagnoser</text>
+    <text x="1395" y="811" text-anchor="middle" font-size="9" fill="#5D4037">logcat 读取/搜索 · 崩溃归因</text>
+  </g>
+
+  <!-- C→D arrows -->
+  <line x1="400" y1="830" x2="400" y2="850" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="1150" y1="830" x2="1150" y2="850" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+  <text x="415" y="846" font-size="10" fill="#5F6368">决策动作</text>
+  <text x="1165" y="846" font-size="10" fill="#5F6368">采集观察</text>
+
+  <!-- ══════════ Row D: 动作/观察层 ══════════ -->
+  <rect x="50" y="850" width="720" height="80" rx="10" fill="#FCE7F0" stroke="#C2185B" stroke-width="1.8"/>
+  <text x="70" y="873" font-size="13" font-weight="700" fill="#880E4F">动作层 — action_specs 唯一权威清单</text>
+  <text x="70" y="893" font-size="10.5" fill="#4A148C">operator 方言：元素索引优先 | 0–1000 归一化坐标 + target_description（自述与观测分离）</text>
+  <text x="70" y="911" font-size="10.5" fill="#4A148C">McpActionExecutor 降层 → wire：归一化坐标 · 毫秒时长 · 无寻址语法</text>
+
+  <rect x="790" y="850" width="730" height="80" rx="10" fill="#FCE7F0" stroke="#C2185B" stroke-width="1.8"/>
+  <text x="810" y="873" font-size="13" font-weight="700" fill="#880E4F">观察融合层</text>
+  <text x="810" y="893" font-size="10.5" fill="#4A148C">无障碍树 + OCR + 视觉模型 → "Visible UI Elements" 编号列表</text>
+  <text x="810" y="911" font-size="10.5" fill="#4A148C">Explorer 兜底定位 · 支持 Canvas / Compose / Flutter 自绘界面</text>
+
+  <!-- D→E arrows -->
+  <line x1="400" y1="930" x2="400" y2="950" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+  <line x1="1150" y1="930" x2="1150" y2="950" stroke="#5F6368" stroke-width="2" marker-end="url(#arrGray)"/>
+
+  <!-- ══════════ Row E: 设备层 ══════════ -->
+  <rect x="50" y="950" width="1470" height="110" rx="12" fill="#E9F6EA" stroke="#2E7D32" stroke-width="2"/>
+  <text x="70" y="975" font-size="14" font-weight="700" fill="#1B5E20">设备层 — Android 真机 / 模拟器</text>
+  <g>
+    <rect x="70" y="988" width="340" height="56" rx="7" fill="#FFFFFF" stroke="#66BB6A"/>
+    <text x="240" y="1009" text-anchor="middle" font-size="11" font-weight="700" fill="#1B5E20">ADB（TCP → adb server → 设备）</text>
+    <text x="240" y="1027" text-anchor="middle" font-size="9.5" fill="#33691E">shell · 装 APK · 文件 · ADB_HOST/PORT 可指远程</text>
+
+    <rect x="430" y="988" width="340" height="56" rx="7" fill="#FFFFFF" stroke="#66BB6A"/>
+    <text x="600" y="1009" text-anchor="middle" font-size="11" font-weight="700" fill="#1B5E20">scrcpy 视频管道</text>
+    <text x="600" y="1027" text-anchor="middle" font-size="9.5" fill="#33691E">截图 + 全程录屏 · 与 T+mm:ss 会话时钟同源</text>
+
+    <rect x="790" y="988" width="340" height="56" rx="7" fill="#FFFFFF" stroke="#66BB6A"/>
+    <text x="960" y="1009" text-anchor="middle" font-size="11" font-weight="700" fill="#1B5E20">Accessibility Helper APK</text>
+    <text x="960" y="1027" text-anchor="middle" font-size="9.5" fill="#33691E">本机回环无障碍树 · 不占 UiAutomation 连接</text>
+
+    <rect x="1150" y="988" width="350" height="56" rx="7" fill="#FFFFFF" stroke="#66BB6A"/>
+    <text x="1325" y="1009" text-anchor="middle" font-size="11" font-weight="700" fill="#1B5E20">UIAutomator2 兜底</text>
+    <text x="1325" y="1027" text-anchor="middle" font-size="9.5" fill="#33691E">Helper 失效自动切换 · 报告中明示 · 无线设备 adb connect</text>
+  </g>
+
+  <!-- C ↔ F arrows (corridors) -->
+  <path d="M 1530 740 H 1555 V 1150 H 1530" fill="none" stroke="#3D5A80" stroke-width="2" marker-end="url(#arrGray)"/>
+  <text x="1560" y="960" font-size="10" fill="#3D5A80" transform="rotate(90 1560 960)" text-anchor="middle">多模态 LLM 调用</text>
+  <path d="M 50 790 H 34 V 1150 H 50" fill="none" stroke="#616161" stroke-width="2" marker-end="url(#arrGray)"/>
+  <text x="28" y="960" font-size="10" fill="#616161" transform="rotate(-90 28 960)" text-anchor="middle">逐步落盘 steps/截图/推理</text>
+  <path d="M 50 400 H 14 V 1180 H 50" fill="none" stroke="#8430CE" stroke-width="1.8" stroke-dasharray="6 3" marker-end="url(#arrPurple)"/>
+  <text x="60" y="1080" font-size="10" fill="#8430CE">inspect_trace / status 直读 trace 与 SQLite（旁路，不进 Worker）</text>
+
+  <!-- ══════════ Row F ══════════ -->
+  <rect x="50" y="1090" width="720" height="130" rx="10" fill="#F3F4F6" stroke="#5B616E" stroke-width="1.8"/>
+  <text x="70" y="1114" font-size="13.5" font-weight="700" fill="#3C4043">记忆与遥测</text>
+  <text x="70" y="1136" font-size="10.5" fill="#4B4F55">TranscriptLedger：T+mm:ss 会话时钟 · Era 分块 · 截图→视觉摘要 · 临时通知即弃</text>
+  <text x="70" y="1156" font-size="10.5" fill="#4B4F55">DataEngine SQLite：每步截图(pre/post/overlay) · 动作结构化记录 · 推理流</text>
+  <text x="70" y="1176" font-size="10.5" fill="#4B4F55">trace 目录：status.json · stdout/stderr.log · notes/(计划·笔记) · 录屏</text>
+  <text x="70" y="1196" font-size="10.5" fill="#4B4F55">历史检索工具（search_history / replay_steps）基于同一存储，跨任务只读可查</text>
+
+  <rect x="790" y="1090" width="740" height="130" rx="10" fill="#ECF2FB" stroke="#3D5A80" stroke-width="1.8"/>
+  <text x="810" y="1114" font-size="13.5" font-weight="700" fill="#2C3E50">LLM 层 — ModelFactory 统一路由</text>
+  <text x="810" y="1136" font-size="10.5" fill="#3E5C76">provider：google · openai · anthropic · openrouter · xai · ollama · vllm · custom</text>
+  <text x="810" y="1156" font-size="10.5" fill="#3E5C76">OpenAI 兼容端点可接 GLM-4V / Qwen-VL（OPENAI_BASE_URL 全局单值）</text>
+  <text x="810" y="1176" font-size="10.5" fill="#3E5C76">fallback 降级链 · 熔断器(30s 冷却) · 分类重试/暂停 · 连接池预热</text>
+  <text x="810" y="1196" font-size="10.5" fill="#3E5C76">config/artemis.jsonc 四层：default → presets → nodes → agent(.flash/.pro)</text>
+
+  <!-- Legend -->
+  <g>
+    <line x1="50" y1="1246" x2="90" y2="1246" stroke="#8430CE" stroke-width="2.5"/>
+    <text x="98" y="1250" font-size="10.5" fill="#5F6368">MCP 专属路径</text>
+    <line x1="210" y1="1246" x2="250" y2="1246" stroke="#5F6368" stroke-width="2"/>
+    <text x="258" y="1250" font-size="10.5" fill="#5F6368">常规调用/数据流</text>
+    <line x1="370" y1="1246" x2="410" y2="1246" stroke="#8D6E63" stroke-width="1.8" stroke-dasharray="5 3"/>
+    <text x="418" y="1250" font-size="10.5" fill="#5F6368">图内分支/反馈边</text>
+    <text x="540" y="1250" font-size="10.5" fill="#5F6368">执行链：入口 → (MCP/CLI/Web/SDK) → Daemon → Worker(Flash/Pro) → 动作/观察 → 设备</text>
+  </g>
+</svg>

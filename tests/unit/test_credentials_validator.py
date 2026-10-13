@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+
+import httpx
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from artemis.utils.credentials_validator import validate_api_key, _extract_error_message
+
+from artemis.utils.credentials_validator import _extract_error_message, validate_api_key
+from artemis.config.settings import PROVIDER_BASE_URL_FIELDS, Settings
 
 
 def test_extract_error_message():
@@ -78,3 +83,81 @@ async def test_validate_ocr_success():
         is_valid, msg = await validate_api_key("ocr", "valid_ocr_key_12345")
         assert is_valid
         assert "verified successfully" in msg
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,suffix",
+    [
+        ("google", "/v1beta/models"),
+        ("openai", "/models"),
+        ("deepseek", "/models"),
+        ("zhipu", "/chat/completions"),
+        ("anthropic", "/v1/models"),
+        ("openrouter", "/auth/key"),
+        ("xai", "/models"),
+    ],
+)
+async def test_validation_uses_saved_endpoint_and_explicit_override(monkeypatch, provider, suffix):
+    settings = Settings(_env_file=None, **dict.fromkeys(PROVIDER_BASE_URL_FIELDS.values()))
+    saved_base = f"https://{provider}.saved.example"
+    setattr(settings, PROVIDER_BASE_URL_FIELDS[provider], saved_base)
+    monkeypatch.setattr("artemis.utils.credentials_validator.settings", settings)
+    original_client = httpx.AsyncClient
+    explicit_base = f"https://{provider}.explicit.example"
+
+    def upstream(request):
+        supplied = (
+            request.headers.get("x-goog-api-key")
+            or request.headers.get("x-api-key")
+            or request.headers.get("authorization", "").removeprefix("Bearer ")
+        )
+        authorized = (
+            str(request.url.copy_with(query=None)) in {saved_base + suffix, explicit_base + suffix}
+            and request.method == ("POST" if provider == "zhipu" else "GET")
+            and supplied == "validation-test-secret"
+        )
+        return httpx.Response(200 if authorized else 401, json={})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(upstream), **kwargs),
+    )
+    valid, _ = await validate_api_key(provider, "validation-test-secret")
+    assert valid
+    valid, _ = await validate_api_key(provider, "validation-test-secret", base_url=explicit_base)
+    assert valid
+    valid, _ = await validate_api_key(provider, "validation-test-secret", base_url="https://wrong.example")
+    assert not valid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(401, json={"error": {"message": "bad test-secret credential"}}),
+        httpx.Response(401, text="bad test-secret credential"),
+    ],
+)
+async def test_validation_redacts_upstream_secret(response):
+    with (
+        patch("artemis.utils.credentials_validator.settings", SimpleNamespace(get_base_url=lambda _: None)),
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=response),
+    ):
+        valid, message = await validate_api_key("openai", "test-secret")
+    assert not valid
+    assert "test-secret" not in message
+
+
+@pytest.mark.asyncio
+async def test_validation_redacts_network_exception_in_response_and_logs(caplog):
+    with (
+        patch("artemis.utils.credentials_validator.settings", SimpleNamespace(get_base_url=lambda _: None)),
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock,
+              side_effect=httpx.RequestError("test-secret is invalid")),
+    ):
+        valid, message = await validate_api_key("deepseek", "test-secret")
+    assert not valid
+    assert "test-secret" not in message
+    assert "test-secret" not in caplog.text

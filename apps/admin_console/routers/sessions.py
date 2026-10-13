@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 
 from artemis.config import DB_PATH, TRACES_PATH
 from artemis.runtime import trace_store
+from artemis.runtime.device_lock import DeviceExecutionLock
 
 try:
     from admin_console.core.state import state
@@ -27,12 +28,14 @@ try:
     from admin_console.database.repositories.trace_repository import trace_repo
     from admin_console.services.media_service import media_service
     from admin_console.services.model_service import model_service
+    from admin_console.services.task_queue_service import task_queue_service
 except ImportError:
     from apps.admin_console.core.state import state
     from apps.admin_console.database.repositories.session_repository import session_repo
     from apps.admin_console.database.repositories.trace_repository import trace_repo
     from apps.admin_console.services.media_service import media_service
     from apps.admin_console.services.model_service import model_service
+    from apps.admin_console.services.task_queue_service import task_queue_service
 
 
 router = APIRouter(tags=["sessions"])
@@ -224,16 +227,50 @@ async def cleanup_history_endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _session_is_executing(session_id: str) -> bool:
+    return (
+        session_id in state.active_runs
+        or any(
+            str(item.get("session_id")) == session_id and item.get("status") == "running"
+            for item in state.queue_items
+        )
+        or any(
+            str(owner.session_id) == session_id
+            for owner in DeviceExecutionLock.get_active_owners().values()
+        )
+    )
+
+
 @router.post("/api/sessions/{session_id}/delete")
 async def delete_session_endpoint(session_id: str):
     try:
         from artemis.data_engine.storage import StorageManager
 
+        session_uuid = UUID(session_id)
+        if _session_is_executing(session_id):
+            raise HTTPException(
+                status_code=409, detail="Stop the task and wait for it to finish before deleting it."
+            )
+        queued = any(
+            str(item.get("session_id")) == session_id
+            for item in [*state.queue_items, *DeviceExecutionLock.get_queued_tasks()]
+        )
+        if queued:
+            task_queue_service.stop_tasks(session_id=session_id)
+            # An external worker may have claimed its reservation concurrently.
+            if _session_is_executing(session_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Task cancellation is still finishing. Retry deletion after it stops.",
+                )
+
         storage = StorageManager(DB_PATH, TRACES_PATH)
-        storage.delete_session(UUID(session_id))
+        storage.delete_session(session_uuid)
         return {
             "status": "success",
             "message": f"Session {session_id} deleted successfully",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

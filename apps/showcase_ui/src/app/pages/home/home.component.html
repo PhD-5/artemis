@@ -298,146 +298,14 @@
       <div class="step-title-row">
         <h3 class="step-title">AI Model Setup</h3>
       </div>
-      <p class="step-desc">Google Gemini or custom LLM providers (OpenAI, Claude, Ollama)</p>
+      <p class="step-desc">DeepSeek, Zhipu, Google Gemini and custom LLM providers</p>
     </div>
   </div>
 
   <div class="guide-card-body">
-    <!-- 2 Big Visual Choice Cards -->
-    <div class="model-choice-cards-row">
-      <!-- Card 1: Gemini (Recommended) -->
-      <div class="choice-card" [class.selected]="modelSetupMode() === 'gemini'" (click)="setModelSetupMode('gemini')">
-        <div class="choice-card-top">
-          <div class="choice-radio">
-            <span class="radio-dot" [class.checked]="modelSetupMode() === 'gemini'"></span>
-          </div>
-          <div class="choice-icon-wrap">
-            <svg class="brand-svg gemini-svg" viewBox="0 0 24 24" fill="none">
-              <defs>
-                <linearGradient id="geminiChoiceGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#4285F4" />
-                  <stop offset="50%" stop-color="#9B72CB" />
-                  <stop offset="100%" stop-color="#D96570" />
-                </linearGradient>
-              </defs>
-              <path
-                d="M12 2C12 7.523 7.523 12 2 12C7.523 12 12 16.477 12 22C12 16.477 16.477 12 22 12C16.477 12 12 7.523 12 2Z"
-                fill="url(#geminiChoiceGrad)" />
-            </svg>
-          </div>
-          <div class="choice-text">
-            <div class="choice-title-row">
-              <span class="choice-title">Google Gemini</span>
-              <span class="tag-badge tag-rec">Recommended</span>
-            </div>
-            <p class="choice-desc">Fast multimodal reasoning with free API key from Google AI Studio.</p>
-          </div>
-        </div>
-      </div>
+    <app-provider-setup></app-provider-setup>
 
-      <!-- Card 2: Custom Configuration -->
-      <div class="choice-card" [class.selected]="modelSetupMode() === 'custom'" (click)="setModelSetupMode('custom')">
-        <div class="choice-card-top">
-          <div class="choice-radio">
-            <span class="radio-dot" [class.checked]="modelSetupMode() === 'custom'"></span>
-          </div>
-          <div class="choice-icon-wrap icon-gear">
-            <span class="material-symbols-outlined">tune</span>
-          </div>
-          <div class="choice-text">
-            <div class="choice-title-row">
-              <span class="choice-title">Custom Configuration</span>
-            </div>
-            <p class="choice-desc">Define models in <code>config/artemis.jsonc</code> & keys in <code>.env</code>
-              (OpenAI, Claude, Ollama).</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Dynamic Panel Based on Choice -->
-    @if (modelSetupMode() === 'gemini') {
-    <!-- 1. Gemini API Key Box -->
-    <div class="credentials-input-box">
-      <div class="input-box-header">
-        <div class="header-label">
-          <span class="material-symbols-outlined label-icon">vpn_key</span>
-          <span>Enter Gemini API Key:</span>
-        </div>
-        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
-          class="btn-header-link">
-          <span class="material-symbols-outlined">open_in_new</span>
-          <span>Get Free API Key (Google AI Studio)</span>
-        </a>
-      </div>
-
-      <div class="unified-key-row">
-        <div class="unified-key-wrapper">
-          <span class="material-symbols-outlined key-prefix-icon">key</span>
-          <input [type]="showGeminiKey() ? 'text' : 'password'" class="unified-key-input"
-            [class.is-masked]="!showGeminiKey()" [ngModel]="geminiKeyInput()"
-            (ngModelChange)="onGeminiKeyChange($event)" placeholder="Enter Gemini API Key (e.g. AIzaSy...)"
-            spellcheck="false" autocomplete="off" />
-
-          <!-- Visibility Toggle -->
-          <button type="button" class="btn-icon-action" [title]="showGeminiKey() ? 'Mask Key' : 'Show Plaintext'"
-            (click)="toggleGeminiKeyVisibility()">
-            <span class="material-symbols-outlined">
-              {{ showGeminiKey() ? 'visibility_off' : 'visibility' }}
-            </span>
-          </button>
-
-          <!-- Copy Button -->
-          @if (geminiKeyInput()) {
-          <button type="button" class="btn-icon-action" title="Copy API Key"
-            (click)="copyToClipboard(geminiKeyInput(), 'gemini_key_field')">
-            <span class="material-symbols-outlined" [class.text-emerald]="copiedId() === 'gemini_key_field'">
-              {{ copiedId() === 'gemini_key_field' ? 'check' : 'content_copy' }}
-            </span>
-          </button>
-          }
-        </div>
-
-        <!-- Save Button -->
-        <button type="button" class="btn-unified-save" [class.btn-dirty]="isGeminiModified()"
-          [disabled]="isSavingGeminiKey() || isTestingGeminiKey() || (!isGeminiModified() && !geminiKeyInput().trim())" (click)="saveGeminiKey()">
-          @if (isSavingGeminiKey()) {
-          <span class="material-symbols-outlined spin">sync</span>
-          <span>{{ geminiKeyInput().trim() ? 'Verifying & Saving...' : 'Clearing...' }}</span>
-          } @else {
-          <span class="material-symbols-outlined">{{ geminiKeyInput().trim() ? 'save' : 'delete_outline' }}</span>
-          <span>{{ !geminiKeyInput().trim() ? 'Clear Key' : (isGeminiModified() ? 'Save & Apply' : 'Save Key') }}</span>
-          }
-        </button>
-
-        <!-- Test Button -->
-        <button type="button" class="btn-unified-test" title="Test if Gemini API key is valid"
-          [disabled]="isTestingGeminiKey() || isSavingGeminiKey() || !geminiKeyInput().trim()" (click)="testGeminiKey()">
-          @if (isTestingGeminiKey()) {
-          <span class="material-symbols-outlined spin">sync</span>
-          <span>Testing...</span>
-          } @else {
-          <span class="material-symbols-outlined">network_check</span>
-          <span>Test Key</span>
-          }
-        </button>
-      </div>
-
-      @if (geminiSaveMessage()) {
-      <div class="feedback-msg success">
-        <span class="material-symbols-outlined">check_circle</span>
-        <span>{{ geminiSaveMessage() }}</span>
-      </div>
-      }
-      @if (geminiSaveError()) {
-      <div class="feedback-msg error">
-        <span class="material-symbols-outlined">error</span>
-        <span>{{ geminiSaveError() }}</span>
-      </div>
-      }
-    </div>
-
-    <!-- 2. OCR Enhancement Option for Gemini Mode -->
+    <!-- Optional OCR configuration is independent of the language model provider. -->
     <div class="ocr-enhancement-card">
       <div class="ocr-card-toggle-bar" (click)="toggleOcrConfig()">
         <div class="toggle-bar-left">
@@ -462,6 +330,9 @@
         <p class="ocr-help-desc">
           Provides screen text coordinate grounding to improve element detection and interaction accuracy on text-heavy apps.
         </p>
+        <p class="ocr-help-desc">
+          {{ isOcrConfigured() ? 'API key configured. Enter a new key to replace it.' : 'No API key configured.' }}
+        </p>
 
         <!-- Input Box -->
         <div class="credentials-input-box ocr-box">
@@ -477,7 +348,7 @@
               <span class="material-symbols-outlined key-prefix-icon">key</span>
               <input [type]="showOcrKey() ? 'text' : 'password'" class="unified-key-input" [class.is-masked]="!showOcrKey()"
                 [ngModel]="ocrKeyInput()" (ngModelChange)="onOcrKeyChange($event)"
-                placeholder="Enter Vision OCR API Key (e.g. AIzaSy...)" spellcheck="false" autocomplete="off" />
+                placeholder="Enter a new Vision OCR API key" spellcheck="false" autocomplete="new-password" />
           
               <!-- Visibility Toggle -->
               <button type="button" class="btn-icon-action" [title]="showOcrKey() ? 'Mask Key' : 'Show Plaintext'"
@@ -499,20 +370,28 @@
             </div>
             
             <!-- Save Button -->
-            <button type="button" class="btn-unified-save" [class.btn-dirty]="isOcrModified()"
-              [disabled]="isSavingOcrKey() || isTestingOcrKey() || (!isOcrModified() && !ocrKeyInput().trim())" (click)="saveOcrKey()">
+            <button type="button" class="btn-unified-save" [class.btn-dirty]="canSubmitOcrKey()"
+              [disabled]="isSavingOcrKey() || isTestingOcrKey() || !canSubmitOcrKey()" (click)="saveOcrKey()">
               @if (isSavingOcrKey()) {
               <span class="material-symbols-outlined spin">sync</span>
-              <span>{{ ocrKeyInput().trim() ? 'Verifying & Saving...' : 'Clearing...' }}</span>
+              <span>Saving...</span>
               } @else {
-              <span class="material-symbols-outlined">{{ ocrKeyInput().trim() ? 'save' : 'delete_outline' }}</span>
-              <span>{{ !ocrKeyInput().trim() ? 'Clear Key' : (isOcrModified() ? 'Save & Apply' : 'Save Key') }}</span>
+              <span class="material-symbols-outlined">save</span>
+              <span>{{ isOcrConfigured() ? 'Replace Key' : 'Save Key' }}</span>
               }
             </button>
 
+            @if (isOcrConfigured()) {
+            <button type="button" class="btn-unified-test" title="Clear configured Vision OCR key"
+              [disabled]="isSavingOcrKey() || isTestingOcrKey()" (click)="clearOcrKey()">
+              <span class="material-symbols-outlined">delete_outline</span>
+              <span>Clear Key</span>
+            </button>
+            }
+
             <!-- Test Button -->
             <button type="button" class="btn-unified-test" title="Test if Vision OCR key is valid"
-              [disabled]="isTestingOcrKey() || isSavingOcrKey() || !ocrKeyInput().trim()" (click)="testOcrKey()">
+              [disabled]="isTestingOcrKey() || isSavingOcrKey() || !canSubmitOcrKey()" (click)="testOcrKey()">
               @if (isTestingOcrKey()) {
               <span class="material-symbols-outlined spin">sync</span>
               <span>Testing...</span>
@@ -539,8 +418,7 @@
       </div>
       }
     </div>
-    } @else {
-          <!-- CUSTOM CONFIGURATION & .ENV INSPECTOR (NO OCR HERE) -->
+          <!-- MODEL CONFIGURATION & ENVIRONMENT INSPECTOR -->
           <div class="custom-config-inspector">
 
       <!-- Section 1: Active Model Config (artemis.jsonc) -->
@@ -653,7 +531,6 @@
         </div>
         
         </div>
-    }
     </div>
     </div>
 
@@ -708,73 +585,47 @@
 
           <div class="guide-card-body">
 
-            <!-- STATE A: CONNECTED & READY -->
-            @if (isDeviceReady()) {
-              <div class="connected-device-panel">
+            <div class="connected-device-panel">
+              @for (device of connectedDevices(); track device.serial) {
                 <div class="device-hero-card">
                   <div class="device-avatar">
-                    <span class="material-symbols-outlined device-hero-icon">
-                      phone_android
-                    </span>
+                    <span class="material-symbols-outlined device-hero-icon">phone_android</span>
                   </div>
                   <div class="device-hero-details">
-                    <div class="device-hero-name">
-                      {{ activeDevice()?.model || activeDevice()?.serial }}
-                    </div>
+                    <div class="device-hero-name">{{ device.model || device.serial }}</div>
                     <div class="device-hero-meta">
-                      @if (activeDevice()?.is_emulator) {
-                        <span>Virtual Device</span>
-                        <span class="meta-dot">·</span>
+                      <span>{{ device.serial }}</span>
+                      <span class="meta-dot">·</span>
+                      <span>{{ device.is_emulator ? 'Virtual Device' : 'Android Device' }}</span>
+                      @if (device.screen_resolution) {
+                        <span class="meta-dot">·</span><span>{{ device.screen_resolution }}</span>
                       }
-                      <span>{{ activeDevice()?.serial }}</span>
-                      @if (activeDevice()?.screen_resolution) {
-                        <span class="meta-dot">·</span>
-                        <span>{{ activeDevice()?.screen_resolution }}</span>
-                      }
-                      @if (activeDevice()?.android_version) {
-                        <span class="meta-dot">·</span>
-                        <span>Android {{ activeDevice()?.android_version }}</span>
+                      @if (device.android_version) {
+                        <span class="meta-dot">·</span><span>Android {{ device.android_version }}</span>
                       }
                       @if (isRemoteAdbServer()) {
                         <span class="meta-dot">·</span>
-                        <span class="remote-endpoint-label">
-                          Remote via {{ adbServerStatus()?.endpoint?.host }}:{{ adbServerStatus()?.endpoint?.port }}
-                        </span>
+                        <span>Remote via {{ adbServerStatus()?.endpoint?.host }}:{{ adbServerStatus()?.endpoint?.port }}</span>
                       }
                     </div>
                   </div>
-                  <div class="device-hero-status">
-                    <span class="status-dot dot-pass"></span>
-                    <span class="status-text">Connected</span>
+                  <div class="device-hero-status" [class.not-ready]="device.state !== 'device'" [class.lock-state]="device.state === 'device' && device.is_locked !== false">
+                    <span class="status-dot"></span>
+                    <span class="status-text">
+                      {{ device.state !== 'device' ? device.state : device.is_locked === true ? 'Connected · Locked' : device.is_locked === false ? 'Connected · Ready' : 'Connected · Lock state unknown' }}
+                    </span>
                   </div>
                 </div>
-
-                <!-- Multi-Device Switcher if multiple devices detected -->
-                @if (connectedDevices().length > 1) {
-                  <div class="multi-device-switcher">
-                    <span class="switcher-label">Select Active Device:</span>
-                    <div class="switcher-chips">
-                      @for (dev of connectedDevices(); track dev.serial) {
-                        <button
-                          type="button"
-                          class="device-chip-btn"
-                          [class.selected]="dev.serial === activeDevice()?.serial"
-                          (click)="selectTargetDevice(dev.serial)"
-                        >
-                          <span class="material-symbols-outlined chip-icon">
-                            phone_android
-                          </span>
-                          <span>{{ dev.model || dev.serial }}</span>
-                          @if (dev.serial === activeDevice()?.serial) {
-                            <span class="active-check">✓ Active</span>
-                          }
-                        </button>
-                      }
-                    </div>
-                  </div>
+                @if (device.state === 'device' && device.is_locked !== false) {
+                  <p class="device-lock-info">
+                    {{ device.is_locked === true ? 'This device is locked.' : 'This device lock state is unknown.' }}
+                    Tasks can be submitted: Artemis will try to wake and unlock the device. If it requires a PIN, password, or pattern, the task will fail; credentials will not be guessed.
+                  </p>
                 }
-              </div>
-            }
+              } @empty {
+                <p>No connected Android devices. Use a connection method below, then refresh.</p>
+              }
+            </div>
 
             <!-- STATE B-1: EMULATOR LAUNCHING / DEVICE BOOTING LIVE TRACKER -->
             @if (isEmulatorLaunching() || (!isDeviceReady() && adbProbe()?.summary === 'Device Booting')) {
@@ -952,7 +803,7 @@
             }
 
             <!-- STATE B-3: NO DEVICE DETECTED / READY TO CONNECT GUIDE -->
-            @if (showConnectionMethods() || (!isDeviceReady() && !isEmulatorLaunching() && adbProbe()?.summary !== 'Device Booting' && adbProbe()?.summary !== 'Device Unauthorized' && adbProbe()?.summary !== 'Device Locked' && adbProbe()?.summary !== 'Lock State Unknown' && adbProbe()?.status !== 'fail' && emulatorLaunchState()?.status !== 'failed')) {
+            @if (showConnectionMethods() || (!isDeviceReady() && !isEmulatorLaunching() && adbProbe()?.summary !== 'Device Booting' && adbProbe()?.summary !== 'Device Unauthorized' && adbProbe()?.status !== 'fail' && emulatorLaunchState()?.status !== 'failed')) {
               <div class="foolproof-guide-container">
                 <!-- Method Selection Nav Cards -->
                 <div class="connection-methods-nav">
@@ -1541,51 +1392,6 @@
               </div>
             }
 
-            <!-- STATE C: CONNECTED DEVICE IS LOCKED / LOCK STATE UNVERIFIED -->
-            @if (adbProbe()?.status === 'warn' && (adbProbe()?.summary === 'Device Locked' || adbProbe()?.summary === 'Lock State Unknown')) {
-              <div class="device-locked-panel">
-                <div class="device-locked-card">
-                  <span class="material-symbols-outlined alert-icon">lock</span>
-                  <div class="locked-details">
-                    <div class="locked-title">
-                      {{ adbProbe()?.summary === 'Device Locked' ? 'Device Is Locked' : 'Unable to Verify Lock State' }}
-                    </div>
-                    <div class="locked-desc">
-                      {{ adbProbe()?.description }}
-                    </div>
-                  </div>
-                  <button type="button" class="btn-check-unlock" [disabled]="isRefreshingDiagnostics()" (click)="refreshReadiness()">
-                    <span class="material-symbols-outlined" [class.spinning]="isRefreshingDiagnostics()">refresh</span>
-                    <span>{{ isRefreshingDiagnostics() ? 'Checking...' : 'Check Again' }}</span>
-                  </button>
-                </div>
-
-                <!-- Multi-Device Switcher if multiple devices detected -->
-                @if (connectedDevices().length > 1) {
-                  <div class="multi-device-switcher" style="margin-top: 12px;">
-                    <span class="switcher-label">Select Active Device:</span>
-                    <div class="switcher-chips">
-                      @for (dev of connectedDevices(); track dev.serial) {
-                        <button
-                          type="button"
-                          class="device-chip-btn"
-                          [class.selected]="dev.serial === activeDevice()?.serial"
-                          (click)="selectTargetDevice(dev.serial)"
-                        >
-                          <span class="material-symbols-outlined chip-icon">
-                            phone_android
-                          </span>
-                          <span>{{ dev.model || dev.serial }}</span>
-                          @if (dev.serial === activeDevice()?.serial) {
-                            <span class="active-check">✓ Active</span>
-                          }
-                        </button>
-                      }
-                    </div>
-                  </div>
-                }
-              </div>
-            }
 
             <!-- STATE C: UNAUTHORIZED DEVICE -->
             @if (adbProbe()?.status === 'warn' && adbProbe()?.summary === 'Device Unauthorized') {
@@ -1706,13 +1512,11 @@
       <section class="task-launcher-view">
 
         <!-- Prerequisites Drop Alert if any blocker probe is not passing -->
-        @if (hasReadinessReport() && !isReady()) {
+        @if (hasReadinessReport() && (!isEnvironmentReady() || !isCredentialsReady())) {
           <div class="launcher-warning-bar" (click)="setTab('diagnostics')">
-            <span class="material-symbols-outlined warn-icon">{{ adbProbe()?.summary === 'Device Locked' ? 'lock' : 'warning' }}</span>
+            <span class="material-symbols-outlined warn-icon">warning</span>
             <span>
-              {{ adbProbe()?.summary === 'Device Locked'
-                ? 'Android device is locked. Unlock it and enter the home screen before running a task.'
-                : 'Prerequisites incomplete: runtime, credentials, or Android device is not ready. Click here to open Setup Guide.' }}
+              Runtime or model credentials are not ready. Open Setup Guide to resolve them.
             </span>
             <span class="material-symbols-outlined arrow">arrow_forward</span>
           </div>
@@ -1720,6 +1524,7 @@
 
         <!-- Task composer -->
         <div class="composer-card" [class.is-pro-active]="selectedProfile() === 'pro'">
+          <app-task-device-selector [disabled]="isSubmitting()"></app-task-device-selector>
           
           <!-- Smart Intent Recommendation Strip (if detected) -->
           @if (showIntentSuggestion()) {
@@ -1737,19 +1542,63 @@
             </div>
           }
 
-          <!-- Borderless task input -->
-          <div class="composer-input-area">
-            <textarea
-              id="task-input-field"
-              class="composer-textarea"
-              rows="3"
-              [(ngModel)]="taskGoal"
-              [disabled]="isSubmitting()"
-              placeholder="Describe what you want to achieve on your phone (e.g. Open Gmail and search for latest emails)..."
-              (keydown.control.enter)="runTask()"
-              (keydown.meta.enter)="runTask()"
-            ></textarea>
-          </div>
+          @if (selectedTemplate(); as template) {
+            <div class="template-composer">
+              <div class="template-heading">
+                <strong>Template: {{ template.title }}</strong>
+                <div class="template-actions">
+                  <button type="button" class="copy-api-json" (click)="copyTemplateJson()">
+                    {{ copiedId() === 'template-api-json' ? 'Copied!' : 'Copy API JSON' }}
+                  </button>
+                  <button type="button" (click)="useManualGoal()" [disabled]="isSubmitting()">Edit as custom task</button>
+                </div>
+              </div>
+              <p class="template-id"><span>template_id:</span> <code>{{ template.id }}</code></p>
+              @for (name of template.parameters ?? []; track name) {
+                <label class="template-parameter">
+                  <span>{{ name }} <span class="required-label">{{ missingParameters().includes(name) ? 'Not entered' : 'Entered' }}</span></span>
+                  <input type="text" [attr.aria-label]="'Parameter ' + name"
+                    [ngModel]="templateArgs()[name] ?? ''" (ngModelChange)="setTemplateArg(name, $event)"
+                    [disabled]="isSubmitting()" />
+                </label>
+                @if (missingParameters().includes(name)) {
+                  <button class="template-use-empty" type="button" (click)="setTemplateArg(name, '')"
+                    [disabled]="isSubmitting()">Use empty value for {{ name }}</button>
+                }
+              }
+              <label class="template-preview-label" for="task-template-preview">Task preview</label>
+              <textarea id="task-template-preview" class="composer-textarea template-preview"
+                [value]="templatePreview()" rows="3" readonly aria-readonly="true"></textarea>
+              <label class="template-preview-label" for="task-template-output">Expected Output (optional)</label>
+              <textarea id="task-template-output" class="template-preview template-output"
+                [ngModel]="expectedOutput()" (ngModelChange)="setExpectedOutput($event)"
+                [disabled]="isSubmitting()" [readOnly]="selectedProfile() !== 'pro'"
+                rows="7" spellcheck="false" placeholder="No expected output defined for this template."></textarea>
+              @if (selectedProfile() === 'pro' && expectedOutput()) {
+                <button class="template-use-empty" type="button" (click)="setExpectedOutput('')"
+                  [disabled]="isSubmitting()">Clear expected output</button>
+              }
+              @if (selectedProfile() !== 'pro' && expectedOutput()) {
+                <p class="template-hint">Saved template output. Switch to Pro to edit structured output.</p>
+              }
+              @if (missingParameters().length) {
+                <p class="template-hint">Enter {{ missingParameters().join(', ') }} to run this template. Copy API JSON uses empty strings for arguments not yet entered.</p>
+              }
+            </div>
+          } @else {
+            <div class="composer-input-area">
+              <textarea
+                id="task-input-field"
+                class="composer-textarea"
+                rows="3"
+                [(ngModel)]="taskGoal"
+                [disabled]="isSubmitting()"
+                placeholder="Describe what you want to achieve on your phone (e.g. Open Gmail and search for latest emails)..."
+                (keydown.control.enter)="runTask()"
+                (keydown.meta.enter)="runTask()"
+              ></textarea>
+            </div>
+          }
 
           <!-- Contextual Model Descriptor Strip (Clean & Unified for Flash & Pro) -->
           <div class="composer-model-descriptor" [class.is-pro]="selectedProfile() === 'pro'">
@@ -1811,8 +1660,8 @@
             </div>
 
             <div class="bar-right">
-              @if (taskGoal().length > 0) {
-                <span class="char-count">{{ taskGoal().length }} chars</span>
+              @if (selectedTemplate() || taskGoal().length > 0) {
+                <span class="char-count">{{ (selectedTemplate() ? templatePreview() : taskGoal()).length }} chars</span>
               }
 
               <!-- Run Button -->
@@ -1820,8 +1669,8 @@
                 type="button"
                 class="btn-run-composer"
                 [class.btn-run-pro]="selectedProfile() === 'pro'"
-                [disabled]="!taskGoal().trim() || isSubmitting() || !isReady()"
-                [title]="!isReady() ? (adbProbe()?.summary === 'Device Locked' ? 'Unlock the Android device before running' : 'Complete System Setup before running') : 'Run task'"
+                [disabled]="(selectedTemplate() ? missingParameters().length > 0 : !taskGoal().trim()) || isSubmitting() || !systemService.canSubmitTask()"
+                [title]="systemService.taskDeviceIssue() || (!systemService.canSubmitTask() ? 'Complete System Setup before running' : 'Run task')"
                 (click)="runTask()"
               >
                 @if (isSubmitting()) {
@@ -1836,6 +1685,7 @@
 
         <!-- Pro Mode Standalone Expected Output Card (Clean & Minimalist) -->
         @if (selectedProfile() === 'pro') {
+          @if (!selectedTemplate()) {
           <div class="pro-outputter-standalone-card">
             <div class="outputter-card-header">
               <span class="outputter-title">Expected Output</span>
@@ -1847,7 +1697,7 @@
                 type="text"
                 class="outputter-standalone-input"
                 [ngModel]="expectedOutput()"
-                (ngModelChange)="expectedOutput.set($event)"
+                (ngModelChange)="setExpectedOutput($event)"
                 placeholder="Specify expected output or schema (e.g. 'Extract SMS verification code as JSON' or 'Summary of discounts and total price')..."
                 spellcheck="false"
               />
@@ -1855,7 +1705,7 @@
                 <button
                   type="button"
                   class="btn-clear-standalone"
-                  (click)="expectedOutput.set('')"
+                  (click)="setExpectedOutput('')"
                   title="Clear expected output"
                 >
                   <span class="material-symbols-outlined">close</span>
@@ -1863,6 +1713,7 @@
               }
             </div>
           </div>
+          }
 
           <!-- Pro Mode Tuning Card: verification depth & explorer perception sliders -->
           <div class="pro-tuning-card" [class.tip-open]="activeTuningTip() !== null">
@@ -1981,6 +1832,7 @@
 
         <!-- Recommended Tasks Hub (Clean & Direct) -->
         <div class="smart-suggestions-container">
+          <app-recommended-task-manager (useTask)="applySuggestion($event)"></app-recommended-task-manager>
           <!-- Header Bar: Clean Category Tabs & Shuffle -->
           <div class="suggestions-header-bar">
             <div class="header-left">
@@ -2085,9 +1937,20 @@
                 <!-- Bottom Footer Row: Tag & Action -->
                 <div class="card-footer-row">
                   <span class="tag-pill">{{ item.tag }}</span>
-                  <div class="use-prompt-action">
-                    <span>Use</span>
-                    <span class="material-symbols-outlined action-arrow">arrow_forward</span>
+                  <div class="card-actions">
+                    <button type="button" class="copy-prompt-action"
+                      (click)="$event.stopPropagation(); copyRecommendedJson(item)"
+                      [attr.aria-label]="'Copy API JSON for ' + item.title"
+                      title="Copy template request JSON with empty argument values">
+                      <span class="material-symbols-outlined">{{ copiedId() === 'recommended-json:' + item.id ? 'check' : 'content_copy' }}</span>
+                      <span>{{ copiedId() === 'recommended-json:' + item.id ? 'Copied!' : 'Copy' }}</span>
+                    </button>
+                    <button type="button" class="use-prompt-action"
+                      (click)="$event.stopPropagation(); applySuggestion(item)"
+                      [attr.aria-label]="'Use ' + item.title">
+                      <span>Use</span>
+                      <span class="material-symbols-outlined action-arrow">arrow_forward</span>
+                    </button>
                   </div>
                 </div>
               </div>

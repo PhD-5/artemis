@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import importlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from fastapi import HTTPException
 import pytest
 
 from apps.admin_console.routers import tasks
@@ -27,81 +28,48 @@ from artemis.core.diagnostics.schema import (
 )
 
 
+@pytest.mark.parametrize("lock_state", [True, None, False])
 @pytest.mark.asyncio
-async def test_run_task_rejects_locked_device(monkeypatch):
-    locked_probe = ProbeResult(
+async def test_connected_target_is_queued_regardless_of_lock_state(monkeypatch, tmp_path, lock_state):
+    queue_state = importlib.import_module(tasks.task_queue_service.__module__).state
+    monkeypatch.setattr(tasks, "state", queue_state)
+    monkeypatch.setattr(queue_state, "queue_items", [])
+    monkeypatch.setattr(queue_state, "active_runs", {})
+    monkeypatch.setattr(queue_state, "current_process", None)
+    monkeypatch.setattr(queue_state, "_wake_event", asyncio.Event())
+    monkeypatch.setattr(tasks.task_queue_service, "ensure_worker_running", lambda: None)
+    monkeypatch.setattr(
+        "artemis.runtime.device_lock.get_temp_dir", lambda _subfolder=None: tmp_path
+    )
+    monkeypatch.setattr(
+        tasks.device_pool,
+        "try_list_devices_async",
+        AsyncMock(return_value=[SimpleNamespace(serial="target", state="device")]),
+    )
+    device_probe = ProbeResult(
         id="android_adb",
         category=ProbeCategory.DEVICE,
         title="Device / Emulator Connected",
-        status=ProbeStatus.WARN,
-        is_blocker=True,
-        summary="Device Locked",
-        description="Unlock the device.",
+        status=ProbeStatus.PASS if lock_state is False else ProbeStatus.WARN,
+        is_blocker=lock_state is False,
+        summary="Connected" if lock_state is False else "Device Locked" if lock_state else "Lock State Unknown",
+        description="Task execution verifies the lock screen.",
+        metadata={"active_device": {"serial": "target", "is_locked": lock_state}},
     )
-    run_probe = AsyncMock(return_value=locked_probe)
-    enqueue_tasks = AsyncMock()
-    monkeypatch.setattr(tasks.readiness_engine, "run_device_submission_probe", run_probe)
-    monkeypatch.setattr(tasks.task_queue_service, "enqueue_tasks", enqueue_tasks)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await tasks.run_task(RunRequest(goal="Open Settings"))
-
-    assert exc_info.value.status_code == 409
-    assert "locked" in exc_info.value.detail.lower()
-    enqueue_tasks.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_run_task_enqueues_when_device_is_unlocked(monkeypatch):
-    unlocked_probe = ProbeResult(
-        id="android_adb",
-        category=ProbeCategory.DEVICE,
-        title="Device / Emulator Connected",
-        status=ProbeStatus.PASS,
-        is_blocker=True,
-        summary="Connected",
-        description="Ready.",
+    monkeypatch.setattr(
+        tasks.readiness_engine,
+        "run_device_submission_probe",
+        AsyncMock(return_value=device_probe),
     )
-    run_probe = AsyncMock(return_value=unlocked_probe)
-    enqueue_tasks = AsyncMock(return_value={"status": "started", "tasks": []})
-    monkeypatch.setattr(tasks.readiness_engine, "run_device_submission_probe", run_probe)
-    monkeypatch.setattr(tasks.task_queue_service, "enqueue_tasks", enqueue_tasks)
 
-    result = await tasks.run_task(RunRequest(goal="Open Settings"))
+    result = await tasks.run_task(RunRequest(goal="Open Settings", device_serial="target"))
 
     assert result["status"] == "started"
-    enqueue_tasks.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_run_task_binds_probe_verified_device_when_no_serial_requested(monkeypatch):
-    """Without an explicit serial, run_task enqueues on the probe-verified live device."""
-    unlocked_probe = ProbeResult(
-        id="android_adb",
-        category=ProbeCategory.DEVICE,
-        title="Device / Emulator Connected",
-        status=ProbeStatus.PASS,
-        is_blocker=True,
-        summary="Connected",
-        description="Ready.",
-        metadata={
-            "installed": True,
-            "submission_probe": True,
-            "active_device": {"serial": "emulator-5556", "is_locked": False},
-        },
-    )
-    run_probe = AsyncMock(return_value=unlocked_probe)
-    enqueue_tasks = AsyncMock(return_value={"status": "started", "tasks": []})
-    monkeypatch.setattr(tasks.readiness_engine, "run_device_submission_probe", run_probe)
-    monkeypatch.setattr(tasks.task_queue_service, "enqueue_tasks", enqueue_tasks)
-
-    result = await tasks.run_task(RunRequest(goal="Run on any ready device"))
-
-    assert result["status"] == "started"
-    enqueue_tasks.assert_awaited_once()
-    # Check that device_serial passed to enqueue_tasks is the verified unlocked device
-    _, kwargs = enqueue_tasks.call_args
-    assert kwargs.get("device_serial") == "emulator-5556"
+    assert result["enqueued_count"] == 1
+    assert queue_state.queue_items[0]["status"] == "pending"
+    assert queue_state.queue_items[0]["device_serial"] == "target"
+    assert queue_state.queue_items[0]["goal"] == "Open Settings"
+    assert queue_state.wake_event.is_set()
 
 
 @pytest.mark.asyncio

@@ -14,98 +14,122 @@
  * limitations under the License.
  */
 
-import { Injectable } from '@angular/core';
-import {
-  AppReference,
-  SmartSuggestion,
-  SuggestionCategory,
-  APP_REGISTRY,
-  SMART_TASK_LIBRARY
-} from '../data/smart-tasks.data';
+import { HttpClient } from '@angular/common/http';
+import { Injectable, inject, signal } from '@angular/core';
+import { map, Observable, tap } from 'rxjs';
+import { AppReference, SmartSuggestion, SuggestionCategory } from '../data/smart-tasks.data';
 
-@Injectable({
-  providedIn: 'root'
-})
+interface PresetResponse extends Omit<SmartSuggestion, 'parameters' | 'requiredPackages' | 'matchMode' | 'expectedOutput'> {
+  parameters?: string[];
+  required_packages: string[];
+  match_mode: 'any' | 'all';
+  expected_output?: string | null;
+}
+
+interface CatalogResponse {
+  tasks: PresetResponse[];
+  app_registry: Record<string, AppReference>;
+}
+
+export type TaskPresetInput = Omit<SmartSuggestion, 'id'>;
+
+function toSuggestion(task: PresetResponse): SmartSuggestion {
+  const { required_packages, match_mode, expected_output, ...fields } = task;
+  return { ...fields, parameters: task.parameters ?? [], requiredPackages: required_packages, matchMode: match_mode, expectedOutput: expected_output };
+}
+
+function toPayload(task: TaskPresetInput): Omit<PresetResponse, 'id'> {
+  const { requiredPackages, matchMode, expectedOutput, ...fields } = task;
+  return {
+    ...fields,
+    parameters: task.parameters ?? [],
+    required_packages: requiredPackages ?? [],
+    match_mode: matchMode ?? 'any',
+    expected_output: task.profile === 'pro' ? expectedOutput?.trim() || null : null
+  };
+}
+
+@Injectable({ providedIn: 'root' })
 export class TaskRecommendationService {
-  public readonly allTasks: SmartSuggestion[] = SMART_TASK_LIBRARY;
-  public readonly appRegistry = APP_REGISTRY;
+  private readonly http = inject(HttpClient);
+  private readonly tasksState = signal<SmartSuggestion[]>([]);
+  private readonly registryState = signal<Record<string, AppReference>>({});
+  /** Complete, unfiltered live catalog; management and suggestions share this state. */
+  public readonly allTasks = this.tasksState.asReadonly();
+  public readonly appRegistry = this.registryState.asReadonly();
 
-  /**
-   * Check if task matches any package installed on device
-   */
-  public isSuggestionOnDevice(
-    suggestion: SmartSuggestion,
-    installedPackages: Set<string>
-  ): boolean {
+  public loadCatalog(): Observable<SmartSuggestion[]> {
+    return this.http.get<CatalogResponse>('/api/tasks/catalog').pipe(
+      tap(catalog => this.registryState.set(catalog.app_registry)),
+      map(catalog => catalog.tasks.map(toSuggestion)),
+      tap(tasks => this.tasksState.set(tasks))
+    );
+  }
+
+  public getPreset(id: string): Observable<SmartSuggestion> {
+    return this.http.get<PresetResponse>(`/api/tasks/presets/${encodeURIComponent(id)}`).pipe(map(toSuggestion));
+  }
+
+  public createPreset(input: TaskPresetInput): Observable<SmartSuggestion> {
+    return this.http.post<PresetResponse>('/api/tasks/presets', toPayload(input)).pipe(
+      map(toSuggestion),
+      tap(task => this.tasksState.update(tasks => [...tasks, task]))
+    );
+  }
+
+  public updatePreset(id: string, input: TaskPresetInput): Observable<SmartSuggestion> {
+    return this.http.put<PresetResponse>(`/api/tasks/presets/${encodeURIComponent(id)}`, toPayload(input)).pipe(
+      map(toSuggestion),
+      tap(task => this.tasksState.update(tasks => tasks.map(existing => existing.id === id ? task : existing)))
+    );
+  }
+
+  public deletePreset(id: string): Observable<void> {
+    return this.http.delete<void>(`/api/tasks/presets/${encodeURIComponent(id)}`).pipe(
+      tap(() => this.tasksState.update(tasks => tasks.filter(task => task.id !== id)))
+    );
+  }
+
+  public isSuggestionOnDevice(suggestion: SmartSuggestion, installedPackages: Set<string>): boolean {
     if (installedPackages.size === 0) return false;
-    if (!suggestion.requiredPackages || suggestion.requiredPackages.length === 0) {
-      return true;
-    }
-
+    if (!suggestion.requiredPackages || suggestion.requiredPackages.length === 0) return true;
     if (suggestion.matchMode === 'all') {
       return suggestion.requiredPackages.every(pkg => installedPackages.has(pkg));
     }
     return suggestion.requiredPackages.some(pkg => installedPackages.has(pkg));
   }
 
-  /**
-   * Intelligently rank and filter tasks:
-   * Prioritizes tasks matching apps detected on user's phone without exposing clutter.
-   */
+  /** Pure rank/filter/rotation over the latest catalog; never discards unmatched tasks. */
   public filterAndRankTasks(
     installedPackages: Set<string>,
     category: SuggestionCategory,
     shuffleOffset: number = 0
   ): SmartSuggestion[] {
     const hasDevice = installedPackages.size > 0;
-
-    // 1. Score tasks: prioritize tasks whose apps are on the user's phone
-    const scored = this.allTasks.map(task => {
+    const scored = this.allTasks().map(task => {
       const isMatched = this.isSuggestionOnDevice(task, installedPackages);
       let score = task.priority ?? 50;
-
       if (hasDevice) {
         if (isMatched) {
           score += 100;
-          if (task.requiredPackages && task.requiredPackages.length > 1 && task.matchMode === 'all') {
-            score += 30; // bonus for full multi-app synergy match
-          }
+          if (task.requiredPackages && task.requiredPackages.length > 1 && task.matchMode === 'all') score += 30;
         } else {
           score -= 40;
         }
       }
-
-      return { task, isMatched, score };
+      return { task, score };
     });
-
-    // 2. Filter by category
-    let filtered = scored.filter(item => {
-      if (category === 'flash') {
-        return item.task.profile === 'flash';
-      }
-      if (category === 'pro') {
-        return item.task.profile === 'pro';
-      }
-      if (category === 'cross_app') {
-        return item.task.category === 'cross_app';
-      }
-      if (category === 'monitor') {
-        return item.task.category === 'monitor';
-      }
-      return true; // 'all'
+    const filtered = scored.filter(item => {
+      if (category === 'flash' || category === 'pro') return item.task.profile === category;
+      if (category === 'cross_app' || category === 'monitor') return item.task.category === category;
+      return true;
     });
-
-    // 3. Sort by score descending (matched apps first)
     filtered.sort((a, b) => b.score - a.score);
-
-    let result = filtered.map(f => f.task);
-
-    // 4. Apply shuffle rotation
+    const result = filtered.map(item => item.task);
     if (shuffleOffset > 0 && result.length > 0) {
       const shift = shuffleOffset % result.length;
-      result = [...result.slice(shift), ...result.slice(0, shift)];
+      return [...result.slice(shift), ...result.slice(0, shift)];
     }
-
     return result;
   }
 }

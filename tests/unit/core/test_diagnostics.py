@@ -282,7 +282,7 @@ async def test_submission_probe_skips_full_device_enrichment(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_submission_probe_fails_closed_when_lock_state_is_unknown(monkeypatch):
+async def test_submission_probe_reports_unknown_lock_state_without_blocking(monkeypatch):
     probe = AdbDeviceProbe()
     monkeypatch.setattr(
         "artemis.core.diagnostics.probes.adb_probe.toolchain.resolve",
@@ -303,6 +303,7 @@ async def test_submission_probe_fails_closed_when_lock_state_is_unknown(monkeypa
 
     assert result.summary == "Lock State Unknown"
     assert result.status == ProbeStatus.WARN
+    assert result.is_blocker is False
 
 
 @pytest.mark.asyncio
@@ -326,6 +327,49 @@ async def test_submission_probe_falls_back_to_unlocked_device(monkeypatch):
     assert result.summary == "Connected"
     assert result.metadata["active_device"]["serial"] == "device-unlocked"
     assert result.metadata["active_device"]["is_locked"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_state", [True, None])
+async def test_explicit_submission_target_never_uses_another_unlocked_device(monkeypatch, lock_state):
+    probe = AdbDeviceProbe()
+    monkeypatch.setattr(
+        "artemis.core.diagnostics.probes.adb_probe.toolchain.resolve", lambda name: "adb"
+    )
+    monkeypatch.setattr(
+        probe, "_get_device_states",
+        AsyncMock(return_value=[("target", "device"), ("other", "device")]),
+    )
+    async def lock_state_for_device(adb_path, serial, **kwargs):
+        return lock_state if serial == "target" else False
+
+    monkeypatch.setattr(probe, "_get_confirmed_device_lock_state", lock_state_for_device)
+    result = await probe.probe_submission_readiness(target_serial="target")
+
+    assert result.status == ProbeStatus.WARN
+    assert result.summary == ("Device Locked" if lock_state is True else "Lock State Unknown")
+    assert result.metadata["active_device"] == {"serial": "target", "is_locked": lock_state}
+    assert result.is_blocker is False
+
+
+@pytest.mark.asyncio
+async def test_explicit_submission_target_missing_does_not_probe_another_device(monkeypatch):
+    probe = AdbDeviceProbe()
+    monkeypatch.setattr(
+        "artemis.core.diagnostics.probes.adb_probe.toolchain.resolve", lambda name: "adb"
+    )
+    monkeypatch.setattr(
+        probe, "_get_device_states", AsyncMock(return_value=[("other", "device")])
+    )
+    get_lock = AsyncMock(return_value=False)
+    monkeypatch.setattr(probe, "_get_confirmed_device_lock_state", get_lock)
+
+    result = await probe.probe_submission_readiness(target_serial="missing")
+
+    assert result.status == ProbeStatus.WARN
+    assert result.summary == "Target Device Unavailable"
+    assert result.metadata["active_device"]["serial"] == "missing"
+    get_lock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -393,19 +437,37 @@ async def test_probe_target_serial_forwards_to_adb_probe():
 
 
 @pytest.mark.asyncio
-async def test_credentials_probe_and_dynamic_update():
-    """Verify dynamic API key updates and metadata reflection."""
+async def test_credentials_probe_never_exposes_key_or_environment_fragments(monkeypatch):
+    """The serialized readiness payload must only contain constant key masks."""
+    import json
+
+    from pydantic import SecretStr
     from artemis.config import settings
 
-    settings.set_api_key("google", "test_gemini_key_1234567890", persist_to_env=False)
+    secrets = {
+        "google": SecretStr("g7Aq39-unique-prefix-private-Z3mv"),
+        "openai": SecretStr("o6Vb28-unique-prefix-private-X2nu"),
+        "ocr": SecretStr("c5Wc17-unique-prefix-private-Y1ow"),
+    }
+    monkeypatch.setattr(type(settings), "get_api_key", lambda self, provider: secrets.get(provider))
+    for name in ("OPENAI_BASE_URL", "OLLAMA_BASE_URL", "VLLM_BASE_URL", "VERTEX_AI_PROJECT"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setenv("GROQ_API_KEY", "r4Xd06-unique-prefix-private-T9px")
+    monkeypatch.setattr("artemis.utils.ocr_api.is_ocr_configured", lambda: True)
 
-    probe = LLMCredentialsProbe()
-    result = await probe.probe()
-    assert result.status == ProbeStatus.PASS
-    assert "current_key" in result.metadata
-    assert result.metadata["current_key"] == "test_gemini_key_1234567890"
-    assert "api_keys" in result.metadata
-    assert result.metadata["api_keys"]["google"] == "test_gemini_key_1234567890"
+    for probe in (LLMCredentialsProbe(), VisionOCRProbe()):
+        result = await probe.probe()
+        serialized = json.dumps(result.model_dump(mode="json"))
+        assert result.status == ProbeStatus.PASS
+        assert "********" in serialized
+        for secret in (*secrets.values(), SecretStr("r4Xd06-unique-prefix-private-T9px")):
+            value = secret.get_secret_value()
+            assert value not in serialized
+            assert value[:6] not in serialized
+            assert value[-4:] not in serialized
+        assert "raw_key" not in serialized
+        assert "current_key" not in serialized
+        assert "api_keys" not in serialized
 
 
 @pytest.mark.asyncio

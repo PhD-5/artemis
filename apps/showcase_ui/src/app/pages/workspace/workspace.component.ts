@@ -20,7 +20,9 @@ import { FormsModule } from '@angular/forms';
 import { AgentStreamComponent } from '../../components/agent-stream/agent-stream.component';
 import { ChatInterfaceComponent } from '../../components/chat-interface/chat-interface.component';
 import { FloatingVideoPlayerComponent } from '../../components/floating-video-player/floating-video-player.component';
-import { AgentService } from '../../services/agent.service';
+import { AgentService, taskErrorDetail } from '../../services/agent.service';
+import { SystemService } from '../../services/system.service';
+import { TaskDeviceSelectorComponent } from '../../components/task-device-selector/task-device-selector.component';
 
 @Component({
   selector: 'app-workspace',
@@ -29,7 +31,8 @@ import { AgentService } from '../../services/agent.service';
     FormsModule,
     AgentStreamComponent,
     ChatInterfaceComponent,
-    FloatingVideoPlayerComponent
+    FloatingVideoPlayerComponent,
+    TaskDeviceSelectorComponent
 ],
   templateUrl: './workspace.component.html',
   styleUrl: './workspace.component.scss',
@@ -37,6 +40,7 @@ import { AgentService } from '../../services/agent.service';
 })
 export class WorkspaceComponent implements OnInit {
   public agentService = inject(AgentService);
+  public systemService = inject(SystemService);
   private zone = inject(NgZone);
   private destroyRef = inject(DestroyRef);
 
@@ -223,6 +227,10 @@ export class WorkspaceComponent implements OnInit {
     if (!goal || this.isSubmitting()) {
       return;
     }
+    if (!this.systemService.canSubmitTask()) {
+      this.errorMessage.set(this.systemService.taskDeviceIssue() || 'Complete System Setup before running.');
+      return;
+    }
 
     this.isSubmitting.set(true);
     this.errorMessage.set(null);
@@ -232,7 +240,9 @@ export class WorkspaceComponent implements OnInit {
     }
     this.isInputFocused.set(false);
 
-    this.agentService.runTask(goal, this.selectedProfile()).subscribe({
+    this.agentService.runTask({
+      goal, profile: this.selectedProfile(), deviceSerial: this.systemService.selectedTaskDevice()?.serial
+    }).subscribe({
       next: (res) => {
         this.taskInput = '';
         if (this.dockInputRef?.nativeElement) {
@@ -244,7 +254,7 @@ export class WorkspaceComponent implements OnInit {
       error: (err) => {
         console.error('Failed to submit task:', err);
         this.isSubmitting.set(false);
-        this.errorMessage.set(err.error?.detail || 'The runner is busy. Please wait for current task to finish.');
+        this.errorMessage.set(taskErrorDetail(err.error?.detail) || 'The runner is busy. Please wait for current task to finish.');
         setTimeout(() => {
           this.errorMessage.set(null);
         }, 5000);

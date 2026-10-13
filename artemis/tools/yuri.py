@@ -350,7 +350,7 @@ _SPECS = (
         "device_modify",
         "device.modify",
         ModifyArgs,
-        "Modify device profile for installed target package (farm only).",
+        "Modify device profile for target package, including before installation (farm only).",
         "system",
         "job",
     ),
@@ -471,6 +471,15 @@ _SPECS = (
         "Run explicitly permitted root shell command; unsafe, disabled by default.",
         "system",
         "shell",
+    ),
+    _spec(
+        "network_client_ip",
+        "network.clientIP",
+        NoArgs,
+        "Read the YuriClient process's public egress IP, or null if lookup fails. "
+        "Requires Yuri 1.8.7; not necessarily the proxy egress of another app UID.",
+        "query",
+        "value",
     ),
     _spec(
         "network_start_proxy",

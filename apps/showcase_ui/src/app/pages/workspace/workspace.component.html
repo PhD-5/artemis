@@ -94,6 +94,7 @@ limitations under the License.
 
           <!-- Expanded Full View Content (Visible on hover, focus, or text) -->
           <div class="expanded-card-content">
+            <app-task-device-selector [disabled]="isSubmitting()"></app-task-device-selector>
             <div class="card-main-input-row">
               <!-- Textarea Container with Dynamic English Placeholder -->
               <div class="input-content-area">
@@ -134,7 +135,7 @@ limitations under the License.
               <!-- Send Button -->
               <button type="button" class="dock-circle-btn btn-send"
                 [class.has-content]="!!taskInput.trim()"
-                [disabled]="!taskInput.trim() || isSubmitting()"
+                [disabled]="!taskInput.trim() || isSubmitting() || !systemService.canSubmitTask()"
                 (click)="submitTask()"
                 [title]="isSubmitting() ? 'Starting task...' : 'Start task (Enter)'"
                 aria-label="Start task"

@@ -27,6 +27,60 @@ export type { Session, ModelInfo, TaskQueueItem, AgentStatusResponse, StepItemDa
 
 const SESSION_CACHE_KEY = 'artemis.sessions.v1';
 
+interface RunTaskResponse {
+  status?: string;
+  error?: string;
+  tasks?: { session_id?: string }[];
+}
+export type RunTaskRequest = (
+  | { goal: string; templateId?: never; args?: never }
+  | { templateId: string; args: Record<string, string>; goal?: never }
+) & {
+  profile?: 'flash' | 'pro';
+  expectedOutput?: string;
+  enableOutputter?: boolean;
+  proTuning?: ProTuningOptions;
+  deviceSerial?: string;
+};
+
+/** Shared HTTP body for task admission and the Console's copy action. */
+export function toRunTaskPayload(request: RunTaskRequest) {
+  const payload: {
+    goal?: string; template_id?: string; args?: Record<string, string>;
+    profile?: string; device_serial?: string; expected_output?: string;
+    enable_outputter?: boolean; verification_level?: string; explorer_mode?: string;
+  } = 'templateId' in request && request.templateId
+    ? { template_id: request.templateId, args: request.args }
+    : { goal: request.goal, profile: request.profile ?? 'flash' };
+  if (request.templateId && request.profile) payload.profile = request.profile;
+  if (request.deviceSerial) payload.device_serial = request.deviceSerial;
+  if (request.expectedOutput !== undefined) {
+    payload.expected_output = request.expectedOutput.trim();
+  }
+  if (request.enableOutputter !== undefined) {
+    payload.enable_outputter = request.enableOutputter;
+  }
+  if (request.proTuning?.verificationLevel) {
+    payload.verification_level = request.proTuning.verificationLevel;
+  }
+  if (request.proTuning?.explorerMode) {
+    payload.explorer_mode = request.proTuning.explorerMode;
+  }
+  return payload;
+}
+
+/** FastAPI validation errors can have several field-specific messages. */
+export function taskErrorDetail(detail: unknown): string | null {
+  if (typeof detail === 'string') return detail;
+  if (!Array.isArray(detail)) return null;
+  const messages = detail.map(item => {
+    if (!item || typeof item !== 'object' || typeof item.msg !== 'string') return null;
+    const location = Array.isArray(item.loc) ? item.loc.filter((part: unknown) => part !== 'body').join('.') : '';
+    return location ? `${location}: ${item.msg}` : item.msg;
+  }).filter((message): message is string => message !== null);
+  return messages.length ? messages.join('; ') : null;
+}
+
 export interface VideoSegment {
   url: string;
   /** Back-to-back playlist timeline start (seconds); gaps between segments are not represented. */
@@ -184,13 +238,14 @@ export class AgentService {
       this.activeSessionTracking.set(runId, activeSession);
     }
 
-    // 4. Bridge transient queue-to-running transition gaps
+    // Bridge launch gaps only while the backend still reports execution.
     this.activeSessionTracking.forEach((ts, sid) => {
       if (!sessionMap.has(sid)) {
-        sessionMap.set(sid, {
-          ...ts,
-          status: 'running'
-        });
+        if (status === 'running' || status === 'paused') {
+          sessionMap.set(sid, { ...ts, status: 'running' });
+        } else if (status !== 'offline') {
+          this.activeSessionTracking.delete(sid);
+        }
       }
     });
 
@@ -207,6 +262,8 @@ export class AgentService {
   public pausedError = signal<string | null>(null);
   public isRetrying = signal<boolean>(false);
   public retryMessage = signal<string | null>(null);
+  public retryingSessionId = signal<string | null>(null);
+  public retrySubmissionError = signal<string | null>(null);
   /** Architecture / LLM of the task the status poll reports as running. */
   public activeModel = signal<{ name: string; id: string; provider: string } | null>(null);
   public userPinnedSessionId = signal<string | null>(null); // Pinned session if user explicitly selected a non-running task
@@ -415,13 +472,7 @@ export class AgentService {
   /**
    * Run a new task by submitting to backend queue
    */
-  public runTask(
-    goal: string,
-    profile: string = 'flash',
-    expectedOutput?: string,
-    enableOutputter?: boolean,
-    proTuning?: ProTuningOptions
-  ): Observable<any> {
+  public runTask(request: RunTaskRequest): Observable<RunTaskResponse> {
     return new Observable((obs) => {
       const submittedEvent: StartupProgressEvent = {
         stage: 'submitting',
@@ -429,22 +480,15 @@ export class AgentService {
         timestamp: Date.now() / 1000
       };
       this.pendingStartupProgress.set([submittedEvent]);
-      const payload: any = { goal, profile };
-      if (expectedOutput && expectedOutput.trim()) {
-        payload.expected_output = expectedOutput.trim();
-      }
-      if (enableOutputter !== undefined) {
-        payload.enable_outputter = enableOutputter;
-      }
-      if (proTuning?.verificationLevel) {
-        payload.verification_level = proTuning.verificationLevel;
-      }
-      if (proTuning?.explorerMode) {
-        payload.explorer_mode = proTuning.explorerMode;
-      }
+      const payload = toRunTaskPayload(request);
       this.clearUserPinnedSession();
-      this.http.post<any>('/api/run', payload).subscribe({
+      this.http.post<RunTaskResponse>('/api/run', payload).subscribe({
         next: (res) => {
+          if (res?.status === 'rejected') {
+            this.pendingStartupProgress.set([]);
+            obs.error({ error: { detail: res.error || 'Task submission was rejected.' } });
+            return;
+          }
           if (res && res.tasks && res.tasks.length > 0) {
             const newSessionId = res.tasks[0].session_id;
             if (newSessionId) {
@@ -475,6 +519,51 @@ export class AgentService {
           obs.error(err);
         }
       });
+    });
+  }
+
+  /** Retry as a new run; never overwrite the original session or its traces. */
+  public retrySession(session: Session, event: Event): void {
+    event.stopPropagation();
+    const status = session.status?.toLowerCase();
+    if (this.retryingSessionId() || (status !== 'failed' && status !== 'cancelled')) return;
+    this.retrySubmissionError.set(null);
+    if (!session.initial_goal?.trim()) {
+      this.retrySubmissionError.set('This run has no task goal to retry.');
+      return;
+    }
+    let info = session.device_info;
+    if (typeof info === 'string') {
+      try {
+        info = JSON.parse(info);
+      } catch {
+        info = null;
+      }
+    }
+    const profile = info?.profile || (session.model_info?.name?.toLowerCase() === 'pro' ? 'pro' : 'flash');
+    const tuning = info?.run_tuning;
+    const outputConfig = info?.output_config;
+    const deviceSerial = session.device_serial || session.device_id || info?.device_id || info?.device_serial;
+    this.retryingSessionId.set(session.session_id);
+    this.runTask({
+      goal: session.initial_goal,
+      profile,
+      expectedOutput: outputConfig?.expected_output ?? undefined,
+      enableOutputter: outputConfig?.enable_outputter,
+      proTuning: tuning ? {
+        verificationLevel: tuning.verification_level,
+        explorerMode: tuning.explorer_mode
+      } : undefined,
+      deviceSerial
+    }).subscribe({
+      next: () => {
+        this.retryingSessionId.set(null);
+        this.fetchStatus();
+      },
+      error: (err) => {
+        this.retryingSessionId.set(null);
+        this.retrySubmissionError.set(taskErrorDetail(err.error?.detail) || 'Failed to retry task. Please check server connection.');
+      }
     });
   }
 
@@ -529,6 +618,7 @@ export class AgentService {
     this.isRetrying.set(false);
     this.invalidateStatusSignatures();
     if (effectiveStopAll) {
+      this.activeSessionTracking.clear();
       this.pendingQueue.set([]);
     }
 
@@ -626,6 +716,7 @@ export class AgentService {
   public deleteSession(sessionId: string): Observable<any> {
     // 1. Optimistically update local session state immediately
     this.invalidateStatusSignatures();
+    this.activeSessionTracking.delete(sessionId);
     this.rawSessions.update((list) => list.filter((s) => s.session_id !== sessionId));
     this.persistSessionsCache(this.rawSessions());
     this.pendingQueue.update((list) => list.filter((s) => s.session_id !== sessionId));
@@ -670,6 +761,7 @@ export class AgentService {
   public clearAllHistory(): Observable<any> {
     // 1. Optimistically clear all local session state immediately
     this.invalidateStatusSignatures();
+    this.activeSessionTracking.clear();
     this.userPinnedSessionId.set(null);
     this.rawSessions.set([]);
     this.clearSessionsCache();
@@ -1444,9 +1536,18 @@ export class AgentService {
     this.rawSessions.update((sessions) => sessions.map((session) =>
       session.session_id === sessionId ? { ...session, status } : session
     ));
-    this.pendingQueue.update((sessions) => sessions.map((session) =>
-      session.session_id === sessionId ? { ...session, status } : session
-    ));
+    const terminal = status === 'completed' || status === 'success'
+      || status === 'failed' || status === 'cancelled';
+    if (terminal) {
+      this.activeSessionTracking.delete(sessionId);
+      this.pendingQueue.update((sessions) =>
+        sessions.filter((session) => session.session_id !== sessionId)
+      );
+    } else {
+      this.pendingQueue.update((sessions) => sessions.map((session) =>
+        session.session_id === sessionId ? { ...session, status } : session
+      ));
+    }
   }
 
   private applySessionEndedStatus(sessionId: unknown, data: any): void {
@@ -1462,10 +1563,9 @@ export class AgentService {
           : null;
 
     if (status) {
-      this.activeSessionTracking.delete(String(sessionId));
-      this.setSessionStatus(String(sessionId), status);
-      this.invalidateStatusSignatures();
-      this.activeTasks.update((list) => list.filter((at) => at.session_id !== String(sessionId)));
+      const sid = String(sessionId);
+      this.setSessionStatus(sid, status);
+      this.activeTasks.update((list) => list.filter((at) => at.session_id !== sid));
     }
   }
 

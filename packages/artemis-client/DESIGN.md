@@ -34,6 +34,34 @@ session database, the client reconstructs its state from `queue` and
 Experimental parameters live in `options`. Older servers ignore unknown fields,
 while newer servers can consume them without requiring an immediate SDK release.
 
+Presets use the existing `GET/POST /api/tasks/presets` and
+`GET/PUT/DELETE /api/tasks/presets/{id}` CRUD routes, not a client-side store
+or a new SDK CRUD interface. A preset's `goal` is its prompt template;
+`parameters` is an optional list of unique, case-sensitive ASCII names
+matching `[A-Za-z_][A-Za-z0-9_]*` (default `[]`). The existing
+`POST /api/run` accepts either a raw `goal`/`goals` request or:
+
+```json
+{"template_id": "<preset id>", "args": {"APP": "Settings"}, "session_id": "<UUID>"}
+```
+
+Template requests omit `goal`/`goals`; `args` maps every declared parameter
+to a string, including `""` when intended. Unknown or missing arguments,
+non-string values, and mixed input modes return HTTP 422; missing presets
+return HTTP 404. The server performs single-pass text replacement of
+`${APP}`; `$${APP}` outputs literal `${APP}` and ordinary `$` stays unchanged.
+Argument values are never recursively expanded; neither environment
+variables nor expressions are evaluated. The client validates input modes
+and argument types but never parses or renders templates locally.
+
+An explicitly supplied `profile` or `expected_output` overrides the
+template; `expected_output: null` or `""` explicitly clears its value.
+Omitting these fields inherits the preset, whereas raw goals retain the
+client's default profile. Both modes use the same client-generated UUID,
+admission handle, session polling, and stop endpoint. Reusing a `session_id`
+returns the original task and rendered goal snapshot, even after editing or
+deleting the preset.
+
 ## Phase 2: Stable Remote API
 
 The server should expose versioned endpoints dedicated to remote clients:

@@ -17,4 +17,4 @@ class YuriConfig(BaseModel):
     job_timeout_s: float = Field(default=120.0, gt=0, le=3600)
     poll_interval_s: float = Field(default=1.0, gt=0, le=30)
     identity: Literal["shell", "su_brt", "su"] = "shell"
-    compatible_versions: list[str] = Field(default_factory=lambda: ["1.8.6"], min_length=1)
+    compatible_versions: list[str] = Field(default_factory=lambda: ["1.8.6", "1.8.7"], min_length=1)

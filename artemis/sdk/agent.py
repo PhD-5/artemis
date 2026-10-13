@@ -16,12 +16,13 @@ import asyncio
 import inspect
 import os
 import re
-
+import time
 import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from artemis.clients.screen_client_factory import (
@@ -39,10 +40,10 @@ from artemis.context import (
     DevicePlatform,
     ExecutionSetup,
 )
+from artemis.core.diagnostics.probes.adb_probe import AdbDeviceProbe
 from artemis.data_engine.engine import DataEngine
 from artemis.graph.state import State
 from artemis.runtime import trace_store
-from artemis.runtime.cancel_requests import watch_for_cancel_request
 from artemis.sdk.run_outcome import attach_test_summary, resolve_trace_suffix
 from artemis.sdk.types.agent import AgentConfig
 from artemis.utils.startup_progress import publish_startup_progress
@@ -153,10 +154,15 @@ class Agent(AgentBase):
                 return
 
             # 1. Pre-warm Native SDK client
-            client = genai.Client(api_key=key)
+            base_url = settings.get_base_url("google")
+            native_options = {"http_options": types.HttpOptions(base_url=base_url)} if base_url else {}
+            client = genai.Client(api_key=key, **native_options)
 
             # 2. Pre-warm LangChain client
-            chat = ChatGoogleGenerativeAI(model="gemini-3.8-flash", google_api_key=key)
+            chat_options = {"base_url": base_url} if base_url else {}
+            chat = ChatGoogleGenerativeAI(
+                model="gemini-3.8-flash", google_api_key=key, **chat_options
+            )
 
             # Fire both calls concurrently in the background
             await asyncio.gather(
@@ -209,28 +215,153 @@ class Agent(AgentBase):
         logger.info("✅ Artemis agent stopped.")
 
     async def _ensure_device_unlocked(self) -> None:
-        """Reject secure keyguard instead of allowing an agent to guess credentials."""
-        if self._adb_client is None:
-            raise AgentError("ADB client is not initialized.")
+        """Wake a locked device, but never attempt to enter a credential."""
+        if self._adb_client is None or self._device_context is None:
+            raise AgentError("ADB device is not initialized; cannot inspect its keyguard.")
 
-        device = self._adb_client.device(serial=self._device_context.device_id)
+        serial = self._device_context.device_id
         try:
-            trust_state = str(await asyncio.to_thread(device.shell, "dumpsys trust"))
+            device = self._adb_client.device(serial=serial)
         except Exception as exc:
-            logger.warning(f"Could not inspect Android keyguard state: {exc}")
+            raise AgentError(f"Cannot connect to Android device {serial} to inspect keyguard: {exc}") from exc
+
+        def run_shell(command: str) -> str:
+            # shell(timeout=...) only bounds reads in adbutils, not transport
+            # negotiation. Bound both without changing the shared client.
+            with device.open_transport(timeout=1.5) as connection:
+                connection.send_command(f"shell:{command}")
+                connection.check_okay()
+                return str(connection.read_until_close())
+
+        async def shell(command: str) -> str:
+            operation = asyncio.create_task(asyncio.to_thread(run_shell, command))
+            try:
+                return await asyncio.wait_for(asyncio.shield(operation), timeout=2.0)
+            except (asyncio.CancelledError, TimeoutError) as exc:
+                # Cancelling to_thread cannot stop ADB. Keep the device lease
+                # until the bounded operation ends, before propagating failure.
+                if not operation.done():
+                    try:
+                        await asyncio.shield(operation)
+                    except Exception as drain_error:
+                        logger.debug(f"ADB command finished after cancellation/deadline: {drain_error}")
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise AgentError(
+                    f"Android device {serial} keyguard query/command timed out ({command})."
+                ) from exc
+            except Exception as exc:
+                raise AgentError(
+                    f"Android device {serial} disconnected or keyguard query/command failed "
+                    f"({command}): {exc}"
+                ) from exc
+
+        async def inspect_lock() -> tuple[bool | None, bool | None]:
+            policy = await shell("dumpsys window policy")
+            trust = await shell("dumpsys trust")
+
+            # Restrict Trust to the foreground user. Its first User section can
+            # belong to a different (possibly locked) work profile.
+            sections = re.findall(
+                r"(?ms)^\s*User\b[^\n]*(?:\n(?!\s*User\b)[^\n]*)*",
+                trust,
+            )
+            current = next(
+                (
+                    section for section in sections
+                    if re.search(r"\(\s*current\s*\)", section.splitlines()[0], re.I)
+                ),
+                None,
+            )
+            if current is None:
+                user_output = await shell("am get-current-user")
+                user_match = re.fullmatch(r"\s*(?:Current user:\s*)?(\d+)\s*", user_output, re.I)
+                if user_match:
+                    user_id = user_match.group(1)
+                    current = next(
+                        (
+                            section for section in sections
+                            if re.search(
+                                rf"^\s*User\s+{user_id}\b|"
+                                rf"\(\s*id\s*=\s*{user_id}\b",
+                                section.splitlines()[0], re.I,
+                            )
+                        ),
+                        None,
+                    )
+
+            trust_lock = (
+                re.search(r"\bdeviceLocked\s*=\s*(true|false|1|0)\b", current, re.I)
+                if current is not None else None
+            )
+            # A policy-only unlocked signal cannot prove the current user's
+            # Trust state, especially when a work profile appears first.
+            locked = (
+                AdbDeviceProbe._parse_device_lock_state(policy, current)
+                if trust_lock is not None else None
+            )
+            secure_values = []
+            if current is not None:
+                secure_values.extend(
+                    re.findall(r"\bdeviceSecure\s*=\s*(true|false|1|0)\b", current, re.I)
+                )
+            delegate = re.search(
+                r"(?m)^\s*KeyguardServiceDelegate[ \t]*$((?:\n[ \t]+[^\n]*)*)", policy
+            )
+            if delegate:
+                secure_values.extend(
+                    re.findall(
+                        r"\b(?:secure|deviceSecure|mSecure|mKeyguardSecure|isKeyguardSecure)"
+                        r"\s*=\s*(true|false|1|0)\b",
+                        delegate.group(1), re.I,
+                    )
+                )
+            secure = (
+                True if any(value.lower() in {"true", "1"} for value in secure_values)
+                else False if secure_values else None
+            )
+            return locked, secure
+
+        locked, secure = await inspect_lock()
+        if locked is False:
             return
 
-        # The first deviceLocked value belongs to the current Android user;
-        # later entries may describe a separately locked work profile.
-        match = re.search(r"\bdeviceLocked=(?:true|1|false|0)\b", trust_state, re.IGNORECASE)
-        if match is None:
-            return
-        value = match.group(0).split("=", 1)[1].lower()
-        if value in {"true", "1"}:
+        publish_startup_progress(
+            "device_unlock",
+            "Waking the Android display and checking its keyguard",
+            session_id=self._session_id,
+        )
+        await shell("input keyevent KEYCODE_WAKEUP")
+        dismissed = False
+        if locked is True and secure is False:
+            await shell("wm dismiss-keyguard")
+            dismissed = True
+
+        deadline = time.monotonic() + 3.0
+        while True:
+            locked, secure = await inspect_lock()
+            if locked is False:
+                return
+            if locked is True and secure is False and not dismissed:
+                await shell("wm dismiss-keyguard")
+                dismissed = True
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(min(0.25, deadline - time.monotonic()))
+
+        if locked is True and secure is True:
             raise AgentError(
-                "Android secure keyguard is locked. Unlock the device manually before "
-                "running Artemis; automation will not guess a PIN, password, or pattern."
+                "Android keyguard is locked: PIN, password, or pattern requires manual unlock. "
+                "Task failed; Artemis will not guess credentials."
             )
+        if locked is True and secure is False:
+            raise AgentError(
+                "Android nonsecure keyguard could not be dismissed; task failed before app interaction."
+            )
+        raise AgentError(
+            "Android keyguard state or credential security could not be confirmed; "
+            "task failed closed before app interaction."
+        )
 
     async def _prepare_device_environment(self, context: ArtemisContext):
         """Prepare device environment flags (like forcing Web Accessibility) before the task runs."""
@@ -318,6 +449,11 @@ class Agent(AgentBase):
         run_tuning = run_tuning_summary(self._config, task.request.profile)
         if run_tuning:
             device_data["run_tuning"] = run_tuning
+        device_data["output_config"] = {
+            "expected_output": task.request.output_description,
+            "enable_outputter": self._config.outputter.enabled
+            and not self._config.disable_outputter,
+        }
 
         target_sid = (
             self._session_id

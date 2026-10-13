@@ -260,8 +260,8 @@ class AdbDeviceProbe(BaseProbe):
     ) -> bool | None:
         """Use a recent confirmed state when one dashboard sample times out.
 
-        This smoothing is intentionally dashboard-only. Task submission uses the
-        fresh confirmed probe and fails closed when the state is unknown.
+        This smoothing is intentionally dashboard-only. Task execution verifies
+        a fresh lock state after attempting to unlock the selected device.
         """
         observed = await self._get_confirmed_device_lock_state(
             adb_path, serial, timeout_seconds=timeout_seconds
@@ -388,6 +388,22 @@ class AdbDeviceProbe(BaseProbe):
             )
 
         ready_serials = [serial for serial, state in device_states if state == "device"]
+        if target_serial and target_serial not in ready_serials:
+            return ProbeResult(
+                id=self.probe_id,
+                category=self.category,
+                title="Device / Emulator Connected",
+                status=ProbeStatus.WARN,
+                is_blocker=self.is_blocker,
+                summary="Target Device Unavailable",
+                description=f"Requested Android device {target_serial} is not connected and authorized.",
+                metadata={
+                    "installed": True,
+                    "submission_probe": True,
+                    "active_device": {"serial": target_serial, "is_locked": None},
+                },
+            )
+
         if not ready_serials:
             states = {state for _, state in device_states}
             summary = "Device Unauthorized" if "unauthorized" in states else "No Device Found"
@@ -423,8 +439,8 @@ class AdbDeviceProbe(BaseProbe):
             timeout_seconds=1.0,
         )
 
-        # If preferred device is locked or unknown, check remaining ready devices for an unlocked one
-        if is_locked is not False and len(ready_serials) > 1:
+        # Auto-selection may fall back; an explicit target must pass its own check.
+        if not target_serial and is_locked is not False and len(ready_serials) > 1:
             for candidate in ready_serials:
                 if candidate == preferred:
                     continue
@@ -455,16 +471,18 @@ class AdbDeviceProbe(BaseProbe):
         description = (
             f"ADB connected to {serial}. Ready for task submission."
             if is_locked is False
-            else f"Android device {serial} is locked. Unlock it before running a task."
+            else f"Android device {serial} is locked. Tasks will attempt to unlock it; "
+            "PIN, password, or pattern protection will fail the task."
             if is_locked is True
-            else f"Android lock-screen state could not be verified for {serial}."
+            else f"Android lock-screen state could not be verified for {serial}. "
+            "Tasks will attempt unlocking and verify the screen before automation."
         )
         return ProbeResult(
             id=self.probe_id,
             category=self.category,
             title="Device / Emulator Connected",
             status=status,
-            is_blocker=self.is_blocker,
+            is_blocker=self.is_blocker if is_locked is False else False,
             summary=summary,
             description=description,
             metadata={
@@ -841,28 +859,29 @@ class AdbDeviceProbe(BaseProbe):
             is_locked = active_dev.is_locked is True
             summary = "Device Locked" if is_locked else "Lock State Unknown"
             description = (
-                f"ADB connected to {display_name}, but the Android lock screen is active. "
-                "Unlock the device and enter the home screen before running a task."
+                f"ADB connected to {display_name}. The Android lock screen is active; "
+                "tasks will attempt to unlock it. A PIN, password, or pattern "
+                "requirement will fail the task without entering credentials."
                 if is_locked
                 else f"ADB connected to {display_name}, but Android lock-screen state could not "
-                "be verified. Keep the device unlocked on the home screen and check again."
+                "be verified. Tasks will attempt unlocking and verify the screen before automation."
             )
             return ProbeResult(
                 id=self.probe_id,
                 category=self.category,
                 title="Device / Emulator Connected",
                 status=ProbeStatus.WARN,
-                is_blocker=self.is_blocker,
+                is_blocker=False,
                 summary=summary,
                 description=description,
                 metadata=metadata,
                 actions=[
                     ProbeAction(
                         action_type="hint",
-                        label="Unlock Device" if is_locked else "Verify Device Screen",
+                        label="Automatic Unlock at Task Start",
                         payload=(
-                            "Unlock the Android device and leave it on the home screen. "
-                            "Readiness is checked automatically every few seconds."
+                            "Submit a task to attempt unlocking. If a PIN, password, or pattern "
+                            "is required, the task fails; unlock manually before retrying."
                         ),
                     )
                 ],

@@ -425,14 +425,20 @@ class VideoAnalyzer:
             settings.GOOGLE_API_KEY and settings.GOOGLE_API_KEY.get_secret_value()
         )
 
-        # If client is already set on ctx or explicit Gemini configuration
-        self.client = getattr(ctx, "_genai_client", None)
+        explicit_url = getattr(llm_cfg, "base_url", None)
+        # A model-specific URL must not reuse or replace the shared Gemini client.
+        self.client = None if explicit_url else getattr(ctx, "_genai_client", None)
         if self.client is not None:
             self.use_native_gemini = True
         elif has_google_key and is_gemini_model(self.model_name):
             try:
-                self.client = genai.Client(api_key=settings.GOOGLE_API_KEY.get_secret_value())
-                ctx._genai_client = self.client
+                base_url = explicit_url or settings.get_base_url("google")
+                options = {"http_options": types.HttpOptions(base_url=base_url)} if base_url else {}
+                self.client = genai.Client(
+                    api_key=settings.GOOGLE_API_KEY.get_secret_value(), **options
+                )
+                if not explicit_url:
+                    ctx._genai_client = self.client
                 self.use_native_gemini = True
                 asyncio.create_task(cleanup_abandoned_gemini_files(self.client))
             except Exception as e:

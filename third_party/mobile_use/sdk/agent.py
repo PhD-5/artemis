@@ -520,9 +520,9 @@ class AgentBase:
                 self._prepare_tracing(task=task, context=context)
                 self._prepare_output_files(task=task)
                 if os.environ.get("ARTEMIS_CLOUD_MODE") != "1":
+                    await self._ensure_device_unlocked()
                     if self._ui_adb_client is not None:
                         await self._connect_screen_client(context, str(sess_id))
-                    await self._ensure_device_unlocked()
                 publish_startup_progress(
                     "environment", "Preparing the device environment", session_id=str(sess_id)
                 )

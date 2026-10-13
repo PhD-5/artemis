@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-import { Component, signal, computed, effect, inject, OnInit, OnDestroy, ChangeDetectionStrategy } from '@angular/core';
+import { Component, signal, computed, inject, OnInit, OnDestroy, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { AgentService } from '../../services/agent.service';
+import { AgentService, RunTaskRequest, taskErrorDetail, toRunTaskPayload } from '../../services/agent.service';
 import { SystemService } from '../../services/system.service';
+import { TaskDeviceSelectorComponent } from '../../components/task-device-selector/task-device-selector.component';
+import { ProviderSetupComponent } from '../../components/provider-setup/provider-setup.component';
+import { RecommendedTaskManagerComponent } from '../../components/recommended-task-manager/recommended-task-manager.component';
 import {
   AdbServerConnectionResult,
   AdbServerDevice,
@@ -28,7 +31,8 @@ import {
 import {
   AppReference,
   SmartSuggestion,
-  SuggestionCategory
+  SuggestionCategory,
+  renderTaskTemplate
 } from '../../core/data/smart-tasks.data';
 import { TaskRecommendationService } from '../../core/services/task-recommendation.service';
 import {
@@ -103,7 +107,7 @@ type AdbGuideTab = 'emulator' | 'usb' | 'wifi' | 'remote';
 @Component({
   selector: 'app-home',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, TaskDeviceSelectorComponent, ProviderSetupComponent, RecommendedTaskManagerComponent],
   templateUrl: './home.component.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './home.component.scss'
@@ -121,22 +125,12 @@ export class HomeComponent implements OnInit, OnDestroy {
   public activeAdbGuideTab = signal<AdbGuideTab>('emulator');
   public emulatorSetupMode = signal<'studio' | 'cli'>('studio');
 
-  // Interactive guide tab for LLM / OCR credentials: 'gemini' | 'ocr'
-  public modelSetupMode = signal<'gemini' | 'custom'>('gemini');
   public showOcrConfig = signal<boolean>(false);
   public showFullConfigFile = signal<boolean>(false);
 
   // Model & Environment configuration from backend
   public modelConfigEnv = computed(() => this.systemService.modelConfigEnv());
 
-  // Google Gemini API Key State
-  public geminiKeyInput = signal<string>('');
-  public showGeminiKey = signal<boolean>(false);
-  public isSavingGeminiKey = signal<boolean>(false);
-  public isTestingGeminiKey = signal<boolean>(false);
-  public geminiSaveMessage = signal<string | null>(null);
-  public geminiSaveError = signal<string | null>(null);
-  public isGeminiKeyEdited = signal<boolean>(false);
 
   // Vision OCR API Key State
   public ocrKeyInput = signal<string>('');
@@ -145,7 +139,6 @@ export class HomeComponent implements OnInit, OnDestroy {
   public isTestingOcrKey = signal<boolean>(false);
   public ocrSaveMessage = signal<string | null>(null);
   public ocrSaveError = signal<string | null>(null);
-  public isOcrKeyEdited = signal<boolean>(false);
 
   // Clipboard copy state tracker for interactive feedback
   public copiedId = signal<string | null>(null);
@@ -195,6 +188,17 @@ export class HomeComponent implements OnInit, OnDestroy {
   public taskGoal = signal<string>('');
   public isSubmitting = signal<boolean>(false);
   public errorMessage = signal<string | null>(null);
+  public selectedTemplate = signal<SmartSuggestion | null>(null);
+  public templateArgs = signal<Record<string, string>>({});
+  public templatePreview = computed(() => {
+    const template = this.selectedTemplate();
+    return template ? renderTaskTemplate(template.goal, this.templateArgs()) : '';
+  });
+  public missingParameters = computed(() =>
+    (this.selectedTemplate()?.parameters ?? []).filter(name => !Object.prototype.hasOwnProperty.call(this.templateArgs(), name))
+  );
+  private profileOverridden = false;
+  private outputOverridden = false;
 
   // Pro Mode Outputter & Structured Output Configuration
   public expectedOutput = signal<string>('');
@@ -318,12 +322,8 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   public applyOutputPreset(preset: string): void {
-    if (this.expectedOutput() === preset) {
-      this.expectedOutput.set('');
-    } else {
-      this.expectedOutput.set(preset);
-      this.showOutputterDrawer.set(true);
-    }
+    this.setExpectedOutput(this.expectedOutput() === preset ? '' : preset);
+    if (this.expectedOutput()) this.showOutputterDrawer.set(true);
   }
 
   // Smart intent detection for model recommendation
@@ -358,14 +358,11 @@ export class HomeComponent implements OnInit, OnDestroy {
   public configProbe = computed(() => this.systemService.configProbe());
   public adbProbe = computed(() => this.systemService.adbProbe());
   public llmProbe = computed(() => this.systemService.llmProbe());
-  public geminiProbe = computed(() => this.systemService.geminiProbe());
-  public ocrProbe = computed(() => this.systemService.ocrProbe());
   public toolchainProbe = computed(() => this.systemService.toolchainProbe());
 
   // Step-level readiness
   public isEnvironmentReady = computed(() => this.systemService.isEnvironmentReady());
   public isCredentialsReady = computed(() => this.systemService.isCredentialsReady());
-  public isSkipCredentialsCheck = computed(() => this.systemService.isSkipCredentialsCheck());
   public isDeviceReady = computed(() => this.systemService.isDeviceReady());
 
   // Device information
@@ -379,14 +376,6 @@ export class HomeComponent implements OnInit, OnDestroy {
   public blockerCount = computed(() => this.systemService.blockerCount());
   public passedBlockerCount = computed(() => this.systemService.passedBlockerCount());
 
-  // Configured LLM providers from probe metadata
-  public configuredLlmProviders = computed<any[]>(() => {
-    const meta = this.llmProbe()?.metadata;
-    if (meta && Array.isArray(meta['providers'])) {
-      return meta['providers'];
-    }
-    return [];
-  });
 
   // Multi-OS detection & active OS selection
   public selectedOs = signal<'linux' | 'darwin' | 'windows' | null>(null);
@@ -461,43 +450,21 @@ export class HomeComponent implements OnInit, OnDestroy {
     return 'avdmanager create avd -n Pixel_8_API_34 -k "system-images;android-34;google_apis;x86_64" --device "pixel_8"';
   });
 
-  // Flag indicating whether Google Cloud Vision OCR is configured
-  public isOcrConfigured = computed<boolean>(() => {
-    const meta = this.ocrProbe()?.metadata;
-    return meta?.['configured'] === true;
+  // OCR configuration is readable; the credential itself is write-only.
+  public isOcrConfigured = computed(() => this.systemService.isProviderConfigured('ocr'));
+  public canSubmitOcrKey = computed(() => {
+    const draft = this.ocrKeyInput().trim();
+    return !!draft && draft !== '********';
   });
 
-  public currentApiKey = computed<string>(() => this.systemService.currentApiKey());
-  public apiKeysMap = computed<Record<string, string>>(() => this.systemService.apiKeysMap());
-
-  public savedGeminiKey = computed<string>(() => {
-    const keys = this.apiKeysMap();
-    return keys['google'] || this.currentApiKey() || '';
-  });
-
-  public isGeminiModified = computed<boolean>(() => {
-    return this.geminiKeyInput().trim() !== this.savedGeminiKey().trim();
-  });
-
-  public savedOcrKey = computed<string>(() => {
-    const keys = this.apiKeysMap();
-    return keys['ocr'] || '';
-  });
-
-  public isOcrModified = computed<boolean>(() => {
-    return this.ocrKeyInput().trim() !== this.savedOcrKey().trim();
-  });
-
-  // Rich Smart Suggestions Library (Device-Aware, Flash vs Pro Tailored)
-  public readonly allSuggestions = this.taskRecService.allTasks;
 
   // Suggestion category filter & shuffle state
   public selectedCategory = signal<SuggestionCategory>('all');
   public shuffleOffset = signal<number>(0);
 
-  // Set of installed package strings from active device
+  // Recommendation app matching follows the task target, not the diagnostic highlight.
   public installedPackages = computed<Set<string>>(() => {
-    const pkgs = this.activeDevice()?.installed_packages;
+    const pkgs = this.systemService.selectedTaskDevice()?.installed_packages;
     if (pkgs && Array.isArray(pkgs)) {
       return new Set(pkgs);
     }
@@ -520,26 +487,13 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.systemService.fetchReadiness().subscribe();
   };
 
-  constructor() {
-    effect(() => {
-      const keys = this.systemService.apiKeysMap();
-      const current = this.systemService.currentApiKey();
-      const googleKey = keys['google'] || current || '';
-      const ocrKey = keys['ocr'] || '';
-      if (!this.isGeminiKeyEdited()) {
-        this.geminiKeyInput.set(googleKey);
-      }
-      if (!this.isOcrKeyEdited()) {
-        this.ocrKeyInput.set(ocrKey);
-      }
-    });
-  }
 
   ngOnInit(): void {
 
     this.loadProTuningDefaults();
     // Initial fetch of system readiness & model configuration
     this.systemService.fetchReadiness().subscribe();
+    this.systemService.fetchProviderConfigurations().subscribe();
     this.systemService.fetchModelConfigEnv().subscribe();
     this.systemService.fetchAdbServerStatus().subscribe({
       next: status => {
@@ -560,6 +514,9 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   public setTab(tab: 'diagnostics' | 'launcher'): void {
+    if (this.activeTab() !== tab) {
+      this.resetOcrDraft();
+    }
     this.activeTab.set(tab);
     if (tab === 'diagnostics') {
       this.systemService.fetchReadiness().subscribe();
@@ -581,233 +538,102 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.emulatorSetupMode.set(mode);
   }
 
-  public setModelSetupMode(mode: 'gemini' | 'custom'): void {
-    this.modelSetupMode.set(mode);
-    if (mode === 'custom') {
-      this.systemService.setSkipCredentialsCheck(true);
-      this.systemService.fetchModelConfigEnv().subscribe();
-    } else {
-      this.systemService.setSkipCredentialsCheck(false);
-    }
-  }
 
   public toggleFullConfigFile(): void {
     this.showFullConfigFile.update(v => !v);
   }
 
-  public toggleGeminiKeyVisibility(): void {
-    this.showGeminiKey.update(v => !v);
-  }
 
   public toggleOcrKeyVisibility(): void {
     this.showOcrKey.update(v => !v);
   }
 
   public toggleOcrConfig(): void {
+    this.resetOcrDraft();
     this.showOcrConfig.update(v => !v);
   }
 
-  public onGeminiKeyChange(val: string): void {
-    this.geminiKeyInput.set(val);
-    this.isGeminiKeyEdited.set(true);
-    this.geminiSaveError.set(null);
-    this.geminiSaveMessage.set(null);
+  private resetOcrDraft(): void {
+    this.ocrKeyInput.set('');
+    this.showOcrKey.set(false);
+    this.ocrSaveError.set(null);
+    this.ocrSaveMessage.set(null);
   }
 
   public onOcrKeyChange(val: string): void {
     this.ocrKeyInput.set(val);
-    this.isOcrKeyEdited.set(true);
     this.ocrSaveError.set(null);
     this.ocrSaveMessage.set(null);
   }
 
-  public saveGeminiKey(): void {
-    const key = this.geminiKeyInput().trim();
-    if (!key) return;
-    this.isSavingGeminiKey.set(true);
-    this.geminiSaveError.set(null);
-    this.geminiSaveMessage.set(null);
-
-    this.systemService.updateApiKey('google', key, true).subscribe({
-      next: (res) => {
-        this.isSavingGeminiKey.set(false);
-        this.isGeminiKeyEdited.set(false);
-        this.geminiSaveMessage.set(res?.message || '✓ Gemini API key verified & saved successfully.');
-        setTimeout(() => this.geminiSaveMessage.set(null), 5000);
-      },
-      error: (err) => {
-        this.isSavingGeminiKey.set(false);
-        this.geminiSaveError.set(err?.error?.detail || err?.message || 'Failed to update Gemini API key.');
-      }
-    });
-  }
-
-  public clearGeminiKey(): void {
-    this.geminiKeyInput.set('');
-    this.isGeminiKeyEdited.set(false);
-    this.geminiSaveError.set(null);
-    this.geminiSaveMessage.set(null);
-
-    if (this.savedGeminiKey().trim()) {
-      this.isSavingGeminiKey.set(true);
-      this.systemService.updateApiKey('google', '', true).subscribe({
-        next: (res) => {
-          this.isSavingGeminiKey.set(false);
-          this.geminiSaveMessage.set(res?.message || '✓ Gemini API key cleared.');
-          setTimeout(() => this.geminiSaveMessage.set(null), 5000);
-        },
-        error: (err) => {
-          this.isSavingGeminiKey.set(false);
-          this.geminiSaveError.set(err?.error?.detail || err?.message || 'Failed to clear Gemini API key.');
-        }
-      });
-    } else {
-      this.geminiSaveMessage.set('✓ Gemini API key cleared.');
-      setTimeout(() => this.geminiSaveMessage.set(null), 3000);
-    }
-  }
 
   public saveOcrKey(): void {
     const key = this.ocrKeyInput().trim();
-    if (!key) return;
+    if (!this.canSubmitOcrKey() || this.isSavingOcrKey() || this.isTestingOcrKey()) return;
     this.isSavingOcrKey.set(true);
     this.ocrSaveError.set(null);
     this.ocrSaveMessage.set(null);
 
-    this.systemService.updateApiKey('ocr', key, true).subscribe({
-      next: (res) => {
+    this.systemService.updateProviderConfiguration('ocr', { api_key: key }, true).subscribe({
+      next: () => {
         this.isSavingOcrKey.set(false);
-        this.isOcrKeyEdited.set(false);
-        this.ocrSaveMessage.set(res?.message || '✓ Vision OCR API key verified & saved.');
+        this.resetOcrDraft();
+        this.ocrSaveMessage.set('✓ Vision OCR API key saved.');
         setTimeout(() => this.ocrSaveMessage.set(null), 5000);
       },
-      error: (err) => {
+      error: () => {
         this.isSavingOcrKey.set(false);
-        this.ocrSaveError.set(err?.error?.detail || err?.message || 'Failed to update Vision OCR key.');
+        this.ocrSaveError.set('Failed to update Vision OCR key.');
       }
     });
   }
 
   public clearOcrKey(): void {
-    this.ocrKeyInput.set('');
-    this.isOcrKeyEdited.set(false);
+    if (!this.isOcrConfigured() || this.isSavingOcrKey() || this.isTestingOcrKey()) return;
+    if (!window.confirm('Clear the configured Vision OCR API key?')) return;
+
+    this.isSavingOcrKey.set(true);
     this.ocrSaveError.set(null);
     this.ocrSaveMessage.set(null);
-
-    if (this.savedOcrKey().trim()) {
-      this.isSavingOcrKey.set(true);
-      this.systemService.updateApiKey('ocr', '', true).subscribe({
-        next: (res) => {
-          this.isSavingOcrKey.set(false);
-          this.ocrSaveMessage.set(res?.message || '✓ Vision OCR API key cleared.');
-          setTimeout(() => this.ocrSaveMessage.set(null), 5000);
-        },
-        error: (err) => {
-          this.isSavingOcrKey.set(false);
-          this.ocrSaveError.set(err?.error?.detail || err?.message || 'Failed to clear Vision OCR key.');
-        }
-      });
-    } else {
-      this.ocrSaveMessage.set('✓ Vision OCR API key cleared.');
-      setTimeout(() => this.ocrSaveMessage.set(null), 3000);
-    }
-  }
-
-  public testGeminiKey(): void {
-    const key = this.geminiKeyInput().trim();
-    if (!key) return;
-    this.isTestingGeminiKey.set(true);
-    this.geminiSaveError.set(null);
-    this.geminiSaveMessage.set(null);
-
-    this.systemService.testApiKey('google', key).subscribe({
-      next: (res) => {
-        this.isTestingGeminiKey.set(false);
-        if (res?.valid) {
-          this.geminiSaveMessage.set(res?.message || '✓ Gemini API key is valid!');
-        } else {
-          this.geminiSaveError.set(res?.message || 'Gemini API key verification failed.');
-        }
-        setTimeout(() => this.geminiSaveMessage.set(null), 5000);
+    this.systemService.updateProviderConfiguration('ocr', { api_key: '' }, true).subscribe({
+      next: () => {
+        this.isSavingOcrKey.set(false);
+        this.resetOcrDraft();
+        this.ocrSaveMessage.set('✓ Vision OCR API key cleared.');
+        setTimeout(() => this.ocrSaveMessage.set(null), 5000);
       },
-      error: (err) => {
-        this.isTestingGeminiKey.set(false);
-        this.geminiSaveError.set(err?.error?.detail || err?.message || 'Gemini API key test failed.');
+      error: () => {
+        this.isSavingOcrKey.set(false);
+        this.ocrSaveError.set('Failed to clear Vision OCR key.');
       }
     });
   }
 
+
   public testOcrKey(): void {
     const key = this.ocrKeyInput().trim();
-    if (!key) return;
+    if (!this.canSubmitOcrKey() || this.isSavingOcrKey() || this.isTestingOcrKey()) return;
     this.isTestingOcrKey.set(true);
     this.ocrSaveError.set(null);
     this.ocrSaveMessage.set(null);
 
-    this.systemService.testApiKey('ocr', key).subscribe({
+    this.systemService.testProviderConfiguration('ocr', { api_key: key }).subscribe({
       next: (res) => {
         this.isTestingOcrKey.set(false);
         if (res?.valid) {
-          this.ocrSaveMessage.set(res?.message || '✓ Vision OCR API key is valid!');
+          this.ocrSaveMessage.set('✓ Vision OCR API key is valid!');
         } else {
-          this.ocrSaveError.set(res?.message || 'Vision OCR API key verification failed.');
+          this.ocrSaveError.set('Vision OCR API key verification failed.');
         }
         setTimeout(() => this.ocrSaveMessage.set(null), 5000);
       },
-      error: (err) => {
+      error: () => {
         this.isTestingOcrKey.set(false);
-        this.ocrSaveError.set(err?.error?.detail || err?.message || 'Vision OCR API key test failed.');
+        this.ocrSaveError.set('Vision OCR API key test failed.');
       }
     });
   }
 
-  public getProviderDisplayName(tab: string): string {
-    switch (tab) {
-      case 'gemini': return 'Gemini';
-      case 'ocr': return 'Vision OCR';
-      default: return tab;
-    }
-  }
-
-  public getProviderEnvVar(tab: string): string {
-    switch (tab) {
-      case 'gemini': return 'GEMINI_API_KEY';
-      case 'ocr': return 'GOOGLE_VISION_API_KEY';
-      default: return 'API_KEY';
-    }
-  }
-
-  public getProviderHint(tab: string): string {
-    switch (tab) {
-      case 'gemini':
-        return 'For a quick start, Google Gemini provides a free API key. Artemis also supports other models (OpenAI, Claude, OpenRouter, etc.)—you can configure your own API keys directly in .env or your environment.';
-      case 'ocr':
-        return 'Google Cloud Vision API key for on-screen OCR text detection and UI grounding.';
-      default:
-        return 'Configure your API key or use environment definitions.';
-    }
-  }
-
-  public skipCredentialsCheck(): void {
-    this.systemService.skipCredentialsCheck();
-  }
-
-  public getApiKeyPlaceholder(tab: string): string {
-    switch (tab) {
-      case 'gemini': return 'Enter Gemini API Key (e.g. AIzaSy...)';
-      case 'ocr': return 'Enter Vision OCR API Key (e.g. AIzaSy...)';
-      default: return 'Enter API Key...';
-    }
-  }
-
-  public isTabProviderActive(tab: string): boolean {
-    if (tab === 'ocr') {
-      return this.isOcrConfigured();
-    }
-    const targetProvider = tab === 'gemini' ? 'google' : tab;
-    const providers = this.configuredLlmProviders();
-    return providers.some(p => p.provider === targetProvider);
-  }
 
   public refreshReadiness(): void {
     this.isRefreshingDiagnostics.set(true);
@@ -1008,9 +834,6 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.systemService.dismissEmulatorStatus().subscribe();
   }
 
-  public selectTargetDevice(serial: string): void {
-    this.systemService.selectDevice(serial).subscribe();
-  }
 
   public getEmulatorCommand(avdName: string): string {
     const p = this.emulatorPath();
@@ -1027,12 +850,36 @@ export class HomeComponent implements OnInit, OnDestroy {
             this.copiedId.set(null);
           }
         }, 2000);
+      }).catch(() => {
+        this.errorMessage.set('Could not copy. Allow clipboard access and try again.');
       });
+    } else {
+      this.errorMessage.set('Clipboard access requires localhost or HTTPS.');
     }
   }
 
   public setProfile(profile: 'flash' | 'pro'): void {
+    if (this.selectedTemplate()) this.profileOverridden = true;
     this.selectedProfile.set(profile);
+  }
+
+  public setExpectedOutput(value: string): void {
+    if (this.selectedTemplate()) this.outputOverridden = true;
+    this.expectedOutput.set(value);
+  }
+
+  public setTemplateArg(name: string, value: string): void {
+    this.templateArgs.update(args => ({ ...args, [name]: value }));
+    this.errorMessage.set(null);
+  }
+
+  public useManualGoal(goal: string = this.templatePreview()): void {
+    this.selectedTemplate.set(null);
+    this.templateArgs.set({});
+    this.profileOverridden = false;
+    this.outputOverridden = false;
+    this.taskGoal.set(goal);
+    this.errorMessage.set(null);
   }
 
   public setCategory(cat: SuggestionCategory): void {
@@ -1048,52 +895,96 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   public applySuggestion(item: SmartSuggestion): void {
-    this.taskGoal.set(item.goal);
+    this.selectedTemplate.set(item);
+    this.templateArgs.set({});
+    this.profileOverridden = false;
+    this.outputOverridden = false;
+    this.taskGoal.set('');
     this.selectedProfile.set(item.profile);
+    this.expectedOutput.set(item.expectedOutput ?? '');
     this.errorMessage.set(null);
   }
 
+  public copyRecommendedJson(item: SmartSuggestion): void {
+    const request: RunTaskRequest = {
+      templateId: item.id,
+      args: Object.fromEntries(item.parameters.map(name => [name, '']))
+    };
+    this.copyToClipboard(JSON.stringify(toRunTaskPayload(request), null, 2), `recommended-json:${item.id}`);
+  }
+
+  public copyTemplateJson(): void {
+    const template = this.selectedTemplate();
+    if (!template) return;
+    const request = this.createRunRequest(this.taskGoal().trim());
+    if (!request.templateId) return;
+    const args = request.args;
+    request.args = Object.fromEntries(
+      template.parameters.map(name => [
+        name, Object.prototype.hasOwnProperty.call(args, name) ? args[name] : ''
+      ])
+    );
+    this.copyToClipboard(JSON.stringify(toRunTaskPayload(request), null, 2), 'template-api-json');
+  }
+
+  private createRunRequest(goal: string): RunTaskRequest {
+    const template = this.selectedTemplate();
+    const options = {
+      deviceSerial: this.systemService.selectedTaskDevice()?.serial,
+      enableOutputter: this.selectedProfile() === 'pro' ? this.enableOutputter() : undefined,
+      proTuning: this.selectedProfile() === 'pro'
+        ? { verificationLevel: this.verificationLevel().id, explorerMode: this.explorerMode().id }
+        : undefined
+    };
+    const output = template || this.selectedProfile() === 'pro' ? this.expectedOutput().trim() : '';
+    return template
+      ? {
+          templateId: template.id, args: this.templateArgs(), ...options,
+          profile: this.profileOverridden ? this.selectedProfile() : undefined,
+          expectedOutput: this.outputOverridden ? output : undefined
+        }
+      : { goal, profile: this.selectedProfile(), expectedOutput: output || undefined, ...options };
+  }
+
   public applyQuickPrompt(promptGoal: string, profile?: 'flash' | 'pro'): void {
-    this.taskGoal.set(promptGoal);
-    if (profile) {
-      this.selectedProfile.set(profile);
-    }
-    this.errorMessage.set(null);
+    this.useManualGoal(promptGoal);
+    if (profile) this.selectedProfile.set(profile);
   }
 
 
   public proceedToLauncher(): void {
-    this.activeTab.set('launcher');
+    this.setTab('launcher');
   }
 
   public runTask(): void {
+    const template = this.selectedTemplate();
     const goal = this.taskGoal().trim();
-    if (!goal) {
+    if (template && this.missingParameters().length) {
+      this.errorMessage.set(`Enter a value for: ${this.missingParameters().join(', ')}. Empty values are allowed; each parameter must be entered.`);
+      return;
+    }
+    if (!template && !goal) {
       this.errorMessage.set('Please enter a task goal before running.');
       return;
     }
 
-    if (!this.isReady()) {
-      this.errorMessage.set('System prerequisites are not satisfied. Please review System Setup first.');
-      this.activeTab.set('diagnostics');
+    if (this.isSubmitting()) return;
+    if (this.systemService.taskDeviceIssue()) {
+      this.errorMessage.set(this.systemService.taskDeviceIssue());
       return;
     }
 
+    if (!this.systemService.canSubmitTask()) {
+      this.errorMessage.set('System prerequisites are not satisfied. Please review System Setup first.');
+      this.setTab('diagnostics');
+      return;
+    }
+
+    const request = this.createRunRequest(goal);
     this.isSubmitting.set(true);
     this.errorMessage.set(null);
 
-    this.agentService
-      .runTask(
-        goal,
-        this.selectedProfile(),
-        this.selectedProfile() === 'pro' && this.expectedOutput().trim()
-          ? this.expectedOutput().trim()
-          : undefined,
-        this.selectedProfile() === 'pro' ? this.enableOutputter() : undefined,
-        this.selectedProfile() === 'pro'
-          ? { verificationLevel: this.verificationLevel().id, explorerMode: this.explorerMode().id }
-          : undefined
-      )
+    this.agentService.runTask(request)
       .subscribe({
         next: () => {
           this.isSubmitting.set(false);
@@ -1103,7 +994,7 @@ export class HomeComponent implements OnInit, OnDestroy {
           console.error('Failed to submit task from home page:', err);
           this.isSubmitting.set(false);
           this.errorMessage.set(
-            err?.error?.detail || 'Failed to submit task. Please check server connection.'
+            taskErrorDetail(err?.error?.detail) || 'Failed to submit task. Please check server connection.'
           );
         }
       });

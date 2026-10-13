@@ -1111,3 +1111,89 @@ async def test_enqueue_tasks_debounces_rapid_identical_submissions():
         )
         assert len(state.queue_items) == 1
         assert res2["enqueued_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_deleting_queued_session_cancels_dispatch_and_preserves_other_task(
+    tmp_path, monkeypatch
+):
+    from apps.admin_console.routers import sessions
+    from artemis.data_engine.models import SessionMetadata
+    from artemis.data_engine.storage import StorageManager
+    from artemis.runtime.device_lock import DeviceExecutionLock
+
+    db_path = tmp_path / "sessions.db"
+    trace_path = tmp_path / "traces"
+    monkeypatch.setattr(sessions, "DB_PATH", db_path)
+    monkeypatch.setattr(sessions, "TRACES_PATH", trace_path)
+    storage = StorageManager(db_path, trace_path)
+    executed = []
+
+    async def execute(item):
+        executed.append(item["session_id"])
+
+    with (
+        patch("apps.admin_console.services.task_queue_service.session_repo"),
+        patch(
+            "artemis.runtime.device_pool.device_pool.validate_explicit_serial_async",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(TaskQueueService, "ensure_worker_running"),
+        patch.object(TaskQueueService, "_execute_task_item", side_effect=execute),
+    ):
+        result = await TaskQueueService.enqueue_tasks(
+            ["Delete this queued task", "Keep this queued task"],
+            device_serial="queue-test-device",
+        )
+        deleted, retained = result["tasks"]
+        for item in (deleted, retained):
+            storage.create_session(
+                SessionMetadata(
+                    session_id=item["session_id"],
+                    initial_goal=item["goal"],
+                    status="pending",
+                )
+            )
+
+        await sessions.delete_session_endpoint(deleted["session_id"])
+
+        assert storage.get_session(deleted["session_id"]) is None
+        assert storage.get_session(retained["session_id"]).status == "pending"
+        assert [item["session_id"] for item in state.queue_tasks] == [
+            retained["session_id"]
+        ]
+        assert [item["session_id"] for item in DeviceExecutionLock.get_queued_tasks()] == [
+            retained["session_id"]
+        ]
+        TaskQueueService._dispatch_pending_tasks()
+        await asyncio.sleep(0)
+        assert executed == [retained["session_id"]]
+
+
+@pytest.mark.asyncio
+async def test_deleting_starting_task_preserves_its_record_and_artifacts(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from fastapi import HTTPException
+    from apps.admin_console.routers import sessions
+    from artemis.data_engine.models import SessionMetadata
+    from artemis.data_engine.storage import StorageManager
+
+    db_path = tmp_path / "sessions.db"
+    trace_path = tmp_path / "traces"
+    monkeypatch.setattr(sessions, "DB_PATH", db_path)
+    monkeypatch.setattr(sessions, "TRACES_PATH", trace_path)
+    storage = StorageManager(db_path, trace_path)
+    session_id = str(uuid4())
+    storage.create_session(
+        SessionMetadata(session_id=session_id, initial_goal="Starting task", status="running")
+    )
+    artifact = trace_path / session_id / "worker.log"
+    artifact.write_text("Worker is starting", encoding="utf-8")
+    state.queue_items = [{"session_id": session_id, "status": "running"}]
+
+    with pytest.raises(HTTPException) as error:
+        await sessions.delete_session_endpoint(session_id)
+
+    assert error.value.status_code == 409
+    assert storage.get_session(session_id).status == "running"
+    assert artifact.read_text(encoding="utf-8") == "Worker is starting"

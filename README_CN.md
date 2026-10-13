@@ -106,6 +106,19 @@ cd artemis
 
 > **提示**：启动后将自动在默认浏览器中打开 Web 控制台（`http://localhost:8000`），提供设备连接向导、实时投屏、任务演练与状态回放面板。你也可以通过命令行直接运行：`uv run artemis run "打开系统设置，找到电池选项并告诉我当前电量" --profile flash`。
 
+### Web 模型配置、推荐任务与目标设备
+
+- **AI Model Setup** 优先推荐 DeepSeek，支持 DeepSeek、Zhipu、Gemini、OpenAI 兼容接口、Anthropic、OpenRouter 和 xAI。Base URL 可读、可修改；已存 API Key 只能覆盖写入，接口、就绪状态和配置预览仅返回固定 `********`，不返回前后缀或原始值。密码框不回填，保存时留空保留旧 Key，填写新 Key 则验证后覆盖。
+- Provider 配置持久化到当前安装环境的 `.env`（源码运行时为仓库根目录，实际路径见界面的 `env_path`）。密钥在磁盘上是**明文存储，不是加密存储**。URL 环境变量为 `GOOGLE_BASE_URL`、`DEEPSEEK_BASE_URL`、`ZHIPU_BASE_URL`、`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL`、`OPEN_ROUTER_BASE_URL`、`XAI_BASE_URL`。DeepSeek 使用 `DEEPSEEK_API_KEY`，默认 URL 为 `https://api.deepseek.com`；Zhipu 使用 `ZAI_API_KEY`，默认 URL 为 `https://open.bigmodel.cn/api/paas/v4`。**Test configuration** 可用服务端已有 Key 测试修改后的 URL，不返回 Key，也不保存草稿。
+- 保存 Provider 配置**不会自动切换运行模型**。在 `config/artemis.jsonc` 中设置 `provider: "deepseek"` 或 `provider: "zhipu"`、账户支持的模型名称及所需 fallback/节点覆盖。模型显式配置的 `base_url` 优先于 Provider URL。覆盖密钥后，新获取的客户端使用新 Key，正在运行的任务保留原客户端。API 兼容不代表图像、视频或专用空间定位能力兼容；视觉节点需选择相应能力的模型。
+- **Recommended Tasks → Manage recommended tasks** 支持新建、查看完整列表及详情、编辑和确认删除。变更通过 SQLite 持久化；内置模板只初始化一次，删除后不会因重启恢复，删除全部模板后仍保持为空。**Use task** 只填入任务，不自动执行。
+- Pro 模板可选保存 **Expected Output** 格式或 schema（模板 API 字段为 `expected_output`）。**Use task** 会同时回填该字段；应用未设置输出预设的模板时会清空上一模板的值。留空即不设置预设，Flash 模板不显示此字段。
+- 模板应用图标使用 Material Symbols。编辑器提供带应用名称的下拉选项和实时图标预览，复用现有应用注册表，并保留已保存模板使用的图标。
+- Setup 只列出检测到的 Android 设备及连接/锁屏状态，不再选择 active 设备。请在首页或 Workspace 下发区域选择 **Target Android device**。已授权且连接正常的锁屏设备也能下发任务：任务取得设备执行锁后，先唤醒并尝试解除非安全锁屏，再初始化 UI 自动化。如果需要 PIN、密码或图案，或无法确认已解锁，则任务失败，不尝试输入凭据。断连后需重新选择，不会静默切换到其他设备；切换只影响新任务，不改变已排队或运行中的任务。
+- **Active Queue → Cancel queued task** 会取消该任务及其设备预约，不影响其他排队或运行中的任务。**Stop this task** 用于停止执行。通过 API 删除排队会话也会先取消设备预约，再删除历史；正在启动或运行的任务必须先停止并结束，才能删除历史和产物（仍在执行时返回 HTTP 409）。取消或删除后的任务会从实时界面缓存中清除，不会重新显示为运行中任务。
+- **Past Runs & History → Retry this task**：悬浮在失败或已取消记录上时，Delete 左侧会显示 Retry；桌面列表和窄屏 Task Queue 均支持。重试以原任务目标、设备、Flash/Pro 模式、已保存的 Pro 参数、Expected Output 和 Outputter 开关创建新 run，不覆盖原记录，也不从中断步骤续跑；显式关闭的 Outputter 保持关闭。新 run 将输出配置保存在 `device_info.output_config`；旧记录若未保存该配置，请从首页重新选择模板或填写 Expected Output 后下发，重试不会从当前模板猜测原配置。未保存的其他启动选项使用当前默认值。提交期间禁用重复重试；设备不可用或服务拒绝提交时，在列表中显示错误。
+
+
 <a id="mcp-setup"></a>
 <a id="mcp"></a>
 <details>
@@ -237,6 +250,22 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+已保存的模板可用字符串参数运行，无需传入原始 goal：
+
+```python
+result = await client.run(template_id="battery-check", args={"APP": "Settings"})
+# 或：handle = await client.submit(template_id="battery-check", args={"APP": "Settings"})
+# result = await client.wait_for_task(handle.task_id)
+```
+
+`goal` 与 `template_id` 互斥；`args` 只用于模板。必须提供所有声明的参数，
+参数值可以是空字符串。服务端只展开一次 `${APP}`，`$${APP}` 保留字面 `${APP}`，
+SDK 不在本地展开参数。显式传入的 `profile` 或 `expected_output` 覆盖模板配置
+（`expected_output=None` 或 `""` 会清除模板中的预期输出），不传则继承模板；
+直接传 goal 时仍采用客户端的 `default_profile`（默认 flash）。
+`Task(goal="...")` 默认 pro；通过 `client.run_task(task)` 提交
+`Task(template_id="...", args={...})` 时，除非显式设置 `profile`，否则沿用模板模式。
+
 </details>
 
 ## 使用方式
@@ -265,7 +294,7 @@ Yuri 插件补充 OCR、设备配置、应用数据管理、代理及 root RPC�
   "enabled": true,
   "allowed_tools": ["yuri_ping", "yuri_app_is_installed", "yuri_find_text", "yuri_click_text", "yuri_job_poll"],
   "identity": "shell",
-  "compatible_versions": ["1.8.6"]
+  "compatible_versions": ["1.8.6", "1.8.7"]
 }
 ```
 
@@ -273,9 +302,13 @@ Yuri 插件补充 OCR、设备配置、应用数据管理、代理及 root RPC�
 
 * **设备准备**：自行安装并启动兼容的 YuriClient，保证 `yuri.rpc` 服务就绪及 ROM/SELinux 权限允许连接。ARTEMIS 不自动安装、启动、重启或提权来修复 probe；请求 Yuri 但服务不可用时明确失败，不静默替换能力。分发包的 `yuri` 是宿主机 wrapper，插件直接调用已安装 APK 的 Java CLI，不向手机推送脚本。
 * **能力权限**：`allowed_tools: null` 使用查询与 OCR 点击集合；`[]` 不允许任何工具。改机、reset、安装/卸载、清数据、备份/恢复、settings 写入、代理、root shell 及重复的原生 UI RPC 需显式列入白名单。定义与参数见 `artemis/tools/yuri.py`；角色 `denylisted_tools` 同时约束声明和直接执行。改机/reset 还要求有效的 `ro.yuri.rom.version`。
+* **改机参数**：`yuri_device_modify` 支持先改机、后安装目标应用，无需目标包已安装。`brand` 是大小写匹配的模板名，例如 `Google_Pixel6`、`Samsung_GalaxyA90`，不是厂商品牌 `google`、`samsung`。
+* **客户端 IP（Yuri 1.8.7）**：白名单加入 `yuri_network_client_ip`，调用参数为 `{}`。同步调用 `network.clientIP`，返回 YuriClient 进程的公网出口 IP 字符串；两个查询服务均失败时为 `null`。不是局域网地址，也不能据此证明其他应用 UID 的代理出口。无需 Job 轮询。
+* **Clash**：`yuri_network_start_clash` 参数为 `{"clash":"<代理 URL 或节点 YAML 的 UTF-8 Base64 编码>"}`，`yuri_network_stop_clash` 参数为 `{}`。实际流量路由取决于设备端 Clash 模板；这两个工具启停 Clash 进程，不等同于 `yuri_network_start_proxy` / `yuri_network_stop_proxy` 的 UID 流量重定向。
 * **执行语义**：查询 `false`、OCR 未命中 `null` 是正常答案；动作 `false`、shell 非零状态、Job `failed` 或 `done/false` 是失败。Yuri 变更单次派发、独占一个动作回合，不进入快速 burst，也不自动重试；系统操作使用参数和设备能力前置条件，不套用 UI 像素检查。
 * **长任务**：拿到提交回执后有界轮询至完成。轮询超时保留任务专属 `job_id` 和结果未知状态，可用 `yuri_job_poll` 继续查询，启用 Job 能力时也应允许此工具。提交阶段若未收到回执，则无法取得 handle，端上是否执行仍未知，不能自动重提。Yuri 重启、换设备或换任务后旧 handle 无效；取消 ARTEMIS 不代表端上 Job 已取消。
   Job 绑定 PID、启动 tick 和可执行映像地址范围，不使用改机会虚拟化的 `boot_id`。若 ROM 隐藏这些进程元数据，必须显式配置 `identity: "su_brt"` 或 `"su"`；元数据不可验证时在提交前失败，不自动提权。
+  `PROCESS_UNAVAILABLE` / `Cannot identify Yuri process for jobs` 也可能表示 shell 看到的代码地址被屏蔽为 `1`，并不表示 Yuri 未运行。修改 `agent.yuri.identity` 后重新发起 Web 任务即可读取新配置；运行中的任务不会热更新身份，无需重新部署 Web/API 服务。
 * **参数与制品**：OCR 点/词框输出统一为设备像素坐标；截图取回宿主机制品路径，app-private 文件可能要求显式 root 身份。安装支持安全的设备路径或无 query/fragment 的 HTTP(S) APK/XAPK URL。Yuri 内部存在 shell 字符串拼接，因此相关参数拒绝不安全字符，不能以 JSON 转义代替端上安全性。备份返回成功仅表示 Yuri 调用返回，仍需独立验证归档完整性。
 * **真机端到端验收**：`scripts/yuri_real_device_acceptance.py` 使用实际配置的模型，通过生产 `Agent.run_task(profile="flash"/"pro")` 执行代理、改机和普通任务六个场景，不 mock 模型或 RPC。除了任务完成状态，还检查执行记录中确实出现 Yuri 动作、实际出口 IP、目标应用 UID 可见的属性，以及普通任务没有 Yuri probe/RPC。root UID 的真实属性和缓存 profile 都不能单独证明改机生效。
   在已启动 Yuri 1.8.6、已有 `sec.prop`、支持 `su_brt` 且可联网的设备上运行：

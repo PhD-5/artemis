@@ -7,13 +7,12 @@
   // 1. Global Default Model (Applied to all sub-agents unless overridden below)
   // ------------------------------------------------------------------------------
   "default": {
-    "provider": "google",
-    "model": "gemini-3.8-flash",
-    "thinking_level": "medium",
-    "fallback": {
-      "provider": "google",
-      "model": "gemini-3.7-flash",
-      "thinking_level": "medium"
+    "provider": "openai",
+    "model": "deepseek-flash",
+    "timeout": 180,
+    "fallback": { 
+      "provider": "openai", 
+      "model": "deepseek-flash"
     }
   },
 
@@ -74,12 +73,10 @@
     // CRITICAL REQUIREMENT: Standard LLMs (including standard Gemini Flash, GPT-4o, Claude 3.7) lack sub-pixel spatial coordinate fine-tuning.
     // To achieve accurate [x, y] point and bounding box localization, this node MUST use specialized Gemini ER (Embodied Reasoning / Robotics) models:
     // e.g., "gemini-robotics-er-2-preview". Non-ER models will fail spatial coordinate detection.
-    "object_detector": {
-      "model": "gemini-robotics-er-2-preview",
-      "fallback": {
-        "provider": "google",
-        "model": "gemini-robotics-er-2-preview"
-      }
+    "object_detector": {       // 原值 gemini-robotics-er-2-preview，必须替换
+      "provider": "openai", 
+      "model": "deepseek-flash",
+      "fallback": { "provider": "openai", "model": "deepseek-flash" }
     },
 
     // 🔍 Explorer: Deep element grounding and multi-candidate visual search
@@ -95,11 +92,9 @@
 
     // 🔽 Hopper: Fast lightweight package name locator
     "hopper": {
-      "model": "gemini-3.5-flash-lite",
-      "fallback": {
-        "provider": "google",
-        "model": "gemini-3.1-flash-lite"
-      }
+      "provider": "openai",
+      "model": "deepseek-flash",
+      "fallback": { "provider": "openai", "model": "deepseek-flash" }
     },
 
     // 📝 Outputter: Synthesizes execution trace into final output report
@@ -134,10 +129,17 @@
   "agent": {
     // Optional plugin permission only: explicit user Yuri request + successful ping are still required.
     "yuri": {
-      "enabled": false,
-      "allowed_tools": null, // null = queries/OCR clicks; destructive/root/native UI tools require an explicit list
-      "identity": "shell", // shell | su_brt | su; never automatically escalated
-      "compatible_versions": ["1.8.6"],
+      "enabled": true,
+      "allowed_tools": [
+        "yuri_device_get_gaid",
+        "yuri_device_reset",
+        "yuri_device_modify",
+        "yuri_network_start_clash",
+        "yuri_network_stop_clash",
+        "yuri_network_client_ip"
+      ],
+      "identity": "su_brt", // shell | su_brt | su; never automatically escalated
+      "compatible_versions": ["1.8.6", "1.8.7"],
       "rpc_timeout_ms": 30000,
       "job_timeout_s": 120,
       "poll_interval_s": 1
@@ -154,8 +156,8 @@
       // Summarizes intermediate steps in background without blocking the runner,
       // replacing images only after strictly objective, high-density summaries are ready.
       "step_summarizer": {
+        "model": "", // empty = inherit the summarizer role (default provider) instead of the Google-native path
         "enabled": true, // Whether background step summarization is active
-        "model": "gemini-3.5-flash-lite", // Lightweight model for fast background inference
         "prune_history_xml": true // Prune outdated heavy XML trees from historical steps
       }
     },

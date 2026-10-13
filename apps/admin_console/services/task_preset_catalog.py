@@ -14,33 +14,14 @@
 
 """Preset Task Catalog & Dynamic Recommendation Engine for Artemis."""
 
-from typing import Any, Literal
-from pydantic import BaseModel, Field
+from typing import Any
 
-
-class AppInfo(BaseModel):
-    """Application metadata."""
-
-    name: str
-    icon: str
-    pkg: str
-    category: str = "general"
-
-
-class TaskPreset(BaseModel):
-    """Smart suggestion task definition."""
-
-    id: str
-    title: str
-    description: str
-    goal: str
-    profile: Literal["flash", "pro"]
-    category: Literal["flash", "pro", "cross_app", "monitor"]
-    tag: str
-    apps: list[AppInfo]
-    required_packages: list[str] = Field(default_factory=list)
-    match_mode: Literal["any", "all"] = "any"
-    priority: int = 50
+try:
+    from admin_console.database.repositories.task_preset_repository import TaskPresetRepository, task_preset_repo
+    from admin_console.schemas.task_preset_schema import AppInfo, TaskPreset
+except ImportError:
+    from apps.admin_console.database.repositories.task_preset_repository import TaskPresetRepository, task_preset_repo
+    from apps.admin_console.schemas.task_preset_schema import AppInfo, TaskPreset
 
 
 # ============================================================================
@@ -447,13 +428,16 @@ PRESET_TASK_CATALOG: list[TaskPreset] = [
 
 
 class TaskRecommendationEngine:
-    """Intelligent recommendation engine matching device capabilities."""
+    """Rank persisted tasks by device match without keeping a stale copy."""
 
-    def __init__(self, catalog: list[TaskPreset] | None = None):
-        self.catalog = catalog or PRESET_TASK_CATALOG
+    def __init__(self, repository: TaskPresetRepository | None = None):
+        self.repository = repository if repository is not None else task_preset_repo
 
     def get_all_tasks(self) -> list[dict[str, Any]]:
-        return [task.model_dump() for task in self.catalog]
+        return [task.model_dump() for task in self.repository.list_all()]
+
+    def get_app_registry(self) -> dict[str, dict[str, str]]:
+        return {pkg: {**app, "pkg": pkg} for pkg, app in APP_REGISTRY.items()}
 
     def recommend_tasks(
         self, installed_packages: list[str] | set[str], category: str = "all", limit: int = 12
@@ -464,7 +448,7 @@ class TaskRecommendationEngine:
 
         scored_tasks: list[tuple[int, TaskPreset, bool]] = []
 
-        for task in self.catalog:
+        for task in self.repository.list_all():
             # Check package presence
             is_matched = False
             if pkgs_set:

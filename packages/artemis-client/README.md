@@ -78,6 +78,28 @@ You can also submit a task and wait for it in one call:
 result = await client.run("Open Android Settings and check the Wi-Fi status")
 ```
 
+For a saved task template, use its returned preset ID and string arguments
+instead of a raw goal:
+
+```python
+handle = await client.submit(template_id="battery-check", args={"APP": "Settings"})
+result = await client.wait_for_task(handle.task_id)
+# Or wait in one call:
+result = await client.run(template_id="battery-check", args={"APP": "Settings"})
+```
+
+`goal` and `template_id` are mutually exclusive; `args` is only valid with
+`template_id`. All declared template arguments must be supplied, including empty
+strings when intended. The server renders `${APP}` once and treats `$${APP}` as
+literal `${APP}`; argument values are not expanded again. The SDK does not render
+templates locally. Explicit `profile` and `expected_output` override the saved
+template; an explicit `expected_output=None` or `""` clears its saved output,
+while an omitted option inherits the template value.
+Raw goals still use the client's `default_profile` (flash by default).
+For the full-runtime `Task` model, `Task(goal="...")` still defaults to pro,
+while `Task(template_id="...", args={...})` inherits the template profile unless
+`profile` is explicitly set. Both work with `client.run_task(task)`.
+
 Main methods:
 
 - `health()` quickly checks whether the server and scheduler are alive.
@@ -87,12 +109,31 @@ Main methods:
 - `submit()` submits an idempotent task and returns immediately.
 - `get_task()` retrieves a task.
 - `wait_for_task()` waits for a terminal state.
-- `run()` submits a task and waits for completion.
+- `run()` submits a raw goal or template and waits for completion.
 - `stop()` stops one task.
 
 By default, `submit()` generates a UUID on the client and sends it as the current
 server's `session_id`. Network retries reuse the same `task_id`, preventing the
 server from creating duplicate tasks.
+
+Presets remain managed by `GET/POST /api/tasks/presets` and
+`GET/PUT/DELETE /api/tasks/presets/{id}`; the SDK does not add CRUD methods.
+Create or update a preset using the existing metadata fields with `goal` as
+the prompt template and optional `parameters: ["APP"]` (defaults to `[]`).
+Parameter names must be unique, case-sensitive ASCII identifiers matching
+`[A-Za-z_][A-Za-z0-9_]*`. Template admission uses the same run endpoint:
+
+```json
+{"template_id": "<id returned by /api/tasks/presets>", "args": {"APP": "Settings"}}
+```
+
+`POST /api/run` accepts this object plus existing run options, but no `goal`
+or `goals`. It rejects unknown, missing, and non-string argument values with
+HTTP 422 (empty strings are valid), and rejects mixed raw/template inputs with
+HTTP 422. Unknown template IDs return HTTP 404. Rendering is single-pass text
+substitution, not environment or expression evaluation. Reusing the same
+`session_id` returns the original task snapshot without re-reading a changed
+or deleted preset.
 
 ## Compatibility
 

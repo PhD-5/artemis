@@ -3627,6 +3627,14 @@ $stream-row-height: 25px;
     gap: 8px;
   }
 
+  .retry-error {
+    color: #b91c1c;
+    background: #fef2f2;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
   .dropdown-item-card {
     padding: 10px 12px;
     background: #f8fafc;
@@ -3652,7 +3660,22 @@ $stream-row-height: 25px;
         }
 
         .btn-delete-card,
+        .btn-retry-card,
         .btn-stop-card {
+          opacity: 1;
+          pointer-events: auto;
+        }
+      }
+    }
+
+    &:focus-within {
+      .item-header-actions {
+        .item-time,
+        .item-time-divider {
+          opacity: 0;
+        }
+        .btn-delete-card,
+        .btn-retry-card {
           opacity: 1;
           pointer-events: auto;
         }
@@ -3823,7 +3846,8 @@ $stream-row-height: 25px;
           transition: opacity 0.15s ease;
         }
 
-        .btn-delete-card {
+        .btn-delete-card,
+        .btn-retry-card {
           position: absolute;
           right: 0;
           top: 50%;
@@ -3851,6 +3875,21 @@ $stream-row-height: 25px;
           &:hover {
             color: #ef4444;
             background: #fee2e2;
+          }
+
+          &:disabled {
+            cursor: not-allowed;
+            color: #cbd5e1;
+          }
+        }
+
+        .btn-retry-card {
+          right: 22px;
+          color: #2563eb;
+
+          &:hover:not(:disabled) {
+            color: #1d4ed8;
+            background: #dbeafe;
           }
         }
 

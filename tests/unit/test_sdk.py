@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 import artemis
 from artemis import ArtemisClient, ConcurrencyMode, Task, TaskResult
@@ -135,3 +136,26 @@ async def test_legacy_task_object_is_forwarded_to_remote_api():
     request_body = transport.calls[0][2]
     assert request_body is not None
     assert request_body["locked_app_package"] == "com.android.settings"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"goal": " "},
+        {"template_id": " "},
+        {"goal": "raw", "template_id": "saved"},
+        {"goal": "raw", "args": {}},
+        {"template_id": "saved", "args": {"name": 2}},
+        {"template_id": "saved", "args": {2: "value"}},
+        {"template_id": 3},
+        {"goal": b"raw"},
+        {"template_id": b"saved"},
+        {"template_id": "saved", "args": {"name": b"value"}},
+    ],
+)
+def test_public_task_rejects_invalid_input_modes(kwargs):
+    with pytest.raises(ValidationError):
+        Task(**kwargs)
+
+

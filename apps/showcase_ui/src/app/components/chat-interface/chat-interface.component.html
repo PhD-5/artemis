@@ -56,6 +56,9 @@ limitations under the License.
   <main class="chat-messages">
     <!-- Tasks Tab Content -->
     @if (agentService.activeTab() === 'tasks') {
+      @if (agentService.retrySubmissionError()) {
+        <div class="retry-error" role="alert">{{ agentService.retrySubmissionError() }}</div>
+      }
       <!-- Active Queue Section -->
       <div class="queue-section-header">
         <span class="material-symbols-outlined section-icon">bolt</span> Active Queue ({{ activeQueue().length }})
@@ -105,12 +108,12 @@ limitations under the License.
                 <button
                   type="button"
                   class="btn-delete-card"
-                  (click)="deleteTask(session.session_id, $event)"
-                  title="Delete this task"
-                  aria-label="Delete this task"
+                  (click)="stopTask(session.session_id, $event)"
+                  title="Cancel queued task"
+                  aria-label="Cancel queued task"
                   [disabled]="isSubmitting()"
                   >
-                  <span class="material-symbols-outlined">delete</span>
+                  <span class="material-symbols-outlined">cancel</span>
                 </button>
               }
             </div>
@@ -160,6 +163,19 @@ limitations under the License.
                     <span class="task-time-divider">·</span>
                   }
                   <span class="task-time">{{ session.start_time * 1000 | date:'shortTime' }}</span>
+                  @if (getTaskStatus(session) === 'failed' || getTaskStatus(session) === 'cancelled') {
+                    <button
+                      type="button"
+                      class="btn-retry-card"
+                      (click)="agentService.retrySession(session, $event)"
+                      [disabled]="isSubmitting() || agentService.retryingSessionId() !== null"
+                      [attr.aria-busy]="agentService.retryingSessionId() === session.session_id"
+                      title="Retry this task"
+                      aria-label="Retry this task"
+                      >
+                      <span class="material-symbols-outlined">refresh</span>
+                    </button>
+                  }
                   @if (getTaskStatus(session) !== 'running' && getTaskStatus(session) !== 'paused') {
                     <button
                       type="button"
@@ -167,7 +183,7 @@ limitations under the License.
                       (click)="deleteTask(session.session_id, $event)"
                       title="Delete this task"
                       aria-label="Delete this task"
-                      [disabled]="isSubmitting()"
+                      [disabled]="isSubmitting() || agentService.retryingSessionId() === session.session_id"
                       >
                       <span class="material-symbols-outlined">delete</span>
                     </button>

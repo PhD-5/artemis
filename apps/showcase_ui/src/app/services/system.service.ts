@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { Injectable, signal, computed, inject, DestroyRef, NgZone } from '@angular/core';
+import { Injectable, signal, computed, effect, inject, DestroyRef, NgZone } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, finalize, shareReplay, tap } from 'rxjs';
 import {
@@ -83,10 +83,9 @@ export class SystemService {
     return llm?.status === 'pass';
   });
 
-  public isDeviceReady = computed(() => {
-    const adb = this.adbProbe();
-    return adb?.status === 'pass';
-  });
+  public isDeviceReady = computed(() =>
+    this.connectedDevices().some(device => device.state === 'device')
+  );
 
   // Step-level counting matching the 3-step onboarding guide
   public totalStepCount = computed(() => 3);
@@ -131,6 +130,33 @@ export class SystemService {
     return [];
   });
 
+  // A task target belongs to this browser and ADB endpoint, not global diagnostics.
+  public taskTarget = signal<{ serial: string; endpoint: string } | null>(null);
+  public selectedTaskDevice = computed(() => {
+    const target = this.taskTarget();
+    if (!target || target.endpoint !== this.adbServerStatus()?.endpoint.identity) return null;
+    return this.connectedDevices().find(device => device.serial === target.serial) ?? null;
+  });
+  public taskDeviceIssue = computed(() => {
+    const target = this.taskTarget();
+    if (!target) return 'Select a target Android device before submitting a task.';
+    if (target.endpoint !== this.adbServerStatus()?.endpoint.identity) {
+      return 'ADB server changed. Select a device on the current server.';
+    }
+    const device = this.selectedTaskDevice();
+    if (!device) return `Device ${target.serial} disconnected. Select a target device again.`;
+    if (device.state !== 'device') return `Device ${device.serial} is ${device.state}.`;
+    return null;
+  });
+  public canSubmitTask = computed(() =>
+    this.isEnvironmentReady() && this.isCredentialsReady() && this.taskDeviceIssue() === null
+  );
+
+  public selectTaskDevice(serial: string): void {
+    const endpoint = this.adbServerStatus()?.endpoint.identity;
+    if (serial && endpoint) this.taskTarget.set({ serial, endpoint });
+  }
+
   // Installed local AVD emulators from metadata
   public installedAvds = computed<string[]>(() => {
     const meta = this.adbProbe()?.metadata;
@@ -150,6 +176,7 @@ export class SystemService {
 
   private pollingTimer: any = null;
   private readinessRequest$: Observable<SystemReadinessReport> | null = null;
+  private adbStatusRequest$: Observable<AdbServerStatus> | null = null;
   private zone = inject(NgZone);
   private lastAppliedReportJson: string | null = null;
   private onVisibilityChange = () => {
@@ -160,6 +187,13 @@ export class SystemService {
 
   constructor() {
     this.startAutoPolling(3000);
+    effect(() => {
+      const endpoint = this.adbServerStatus()?.endpoint.identity;
+      const devices = this.connectedDevices().filter(device => device.state === 'device');
+      if (!this.taskTarget() && endpoint && devices.length === 1) {
+        this.taskTarget.set({ serial: devices[0].serial, endpoint });
+      }
+    });
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
@@ -436,9 +470,14 @@ export class SystemService {
    * Fetch the process-wide ADB server endpoint used by Artemis.
    */
   public fetchAdbServerStatus(): Observable<AdbServerStatus> {
-    return this.http.get<AdbServerStatus>('/api/system/adb/server').pipe(
-      tap(status => this.adbServerStatus.set(status))
-    );
+    if (!this.adbStatusRequest$) {
+      this.adbStatusRequest$ = this.http.get<AdbServerStatus>('/api/system/adb/server').pipe(
+        tap(status => this.adbServerStatus.set(status)),
+        finalize(() => { this.adbStatusRequest$ = null; }),
+        shareReplay({ bufferSize: 1, refCount: false })
+      );
+    }
+    return this.adbStatusRequest$;
   }
 
   /**
@@ -495,34 +534,18 @@ export class SystemService {
     );
   }
 
-  /**
-   * Select a specific connected device serial as active target
-   */
-  public selectDevice(serial: string): Observable<any> {
-    this.isLoading.set(true);
-    return this.http.post<any>('/api/system/devices/select', { serial }).pipe(
-      tap({
-        next: (res) => {
-          if (res?.report) {
-            this.applyReadinessReport(res.report);
-          }
-          this.isLoading.set(false);
-        },
-        error: (err) => {
-          console.error('Failed to select active device:', err);
-          this.isLoading.set(false);
-        }
-      })
-    );
+
+  public providerConfigurations = signal<ProviderConfiguration[]>([]);
+
+  public isProviderConfigured(provider: string): boolean {
+    return this.providerConfigurations().some(item => item.name === provider && item.configured);
   }
 
-  public currentApiKey = computed<string>(() => {
-    return (this.llmProbe()?.metadata?.['current_key'] as string) || '';
-  });
-
-  public apiKeysMap = computed<Record<string, string>>(() => {
-    return (this.llmProbe()?.metadata?.['api_keys'] as Record<string, string>) || {};
-  });
+  public fetchProviderConfigurations(): Observable<ProviderConfigurationsResponse> {
+    return this.http.get<ProviderConfigurationsResponse>('/api/system/credentials').pipe(
+      tap(response => this.providerConfigurations.set(response.providers))
+    );
+  }
 
   public modelConfigEnv = signal<ModelConfigEnvResponse | null>(null);
 
@@ -542,37 +565,31 @@ export class SystemService {
     );
   }
 
-  /**
-   * Test and verify an API key against live provider endpoint without persisting
-   */
-  public testApiKey(provider: string, apiKey: string, baseUrl?: string): Observable<{ valid: boolean; provider: string; message: string }> {
-    return this.http.post<{ valid: boolean; provider: string; message: string }>('/api/system/credentials/test', {
-      provider,
-      api_key: apiKey,
-      base_url: baseUrl
-    });
+  /** Test a new key or the existing server-side key against the supplied endpoint. */
+  public testProviderConfiguration(
+    provider: string, updates: ProviderConfigurationUpdates
+  ): Observable<{ valid: boolean; provider: string; message: string }> {
+    return this.http.post<{ valid: boolean; provider: string; message: string }>(
+      '/api/system/credentials/test', { provider, ...updates }
+    );
   }
 
-  /**
-   * Update, verify, and configure API key for an LLM provider or Vision OCR
-   */
-  public updateApiKey(provider: string, apiKey: string, persistToEnv: boolean = true): Observable<any> {
-    return this.http.post<any>('/api/system/credentials', {
-      provider,
-      api_key: apiKey,
-      persist_to_env: persistToEnv
+  /** Omitted api_key preserves the current secret; never round-trip masked values. */
+  public updateProviderConfiguration(
+    provider: string, updates: ProviderConfigurationUpdates, persistToEnv: boolean = true
+  ): Observable<ProviderConfigurationUpdateResponse> {
+    return this.http.post<ProviderConfigurationUpdateResponse>('/api/system/credentials', {
+      provider, ...updates, persist_to_env: persistToEnv
     }).pipe(
-      tap({
-        next: (res) => {
-          if (res?.report) {
-            this.applyReadinessReport(res.report);
-          }
-          // Refresh model config & env after updating key
-          this.fetchModelConfigEnv().subscribe();
-        },
-        error: (err) => {
-          console.error(`Failed to update credentials for ${provider}:`, err);
-        }
+      tap(response => {
+        const configuration = response.configuration;
+        this.providerConfigurations.update(list =>
+          list.some(item => item.name === configuration.name)
+            ? list.map(item => item.name === configuration.name ? configuration : item)
+            : [...list, configuration]
+        );
+        this.applyReadinessReport(response.report);
+        this.fetchModelConfigEnv().subscribe();
       })
     );
   }
@@ -608,3 +625,27 @@ export interface ModelConfigEnvResponse {
   }>;
 }
 
+
+export interface ProviderConfiguration {
+  name: string;
+  configured: boolean;
+  base_url: string | null;
+  api_key: '********' | null;
+}
+
+export interface ProviderConfigurationsResponse {
+  providers: ProviderConfiguration[];
+}
+
+export interface ProviderConfigurationUpdates {
+  base_url?: string;
+  api_key?: string;
+}
+
+export interface ProviderConfigurationUpdateResponse {
+  status: string;
+  message: string;
+  provider: string;
+  configuration: ProviderConfiguration;
+  report: SystemReadinessReport;
+}

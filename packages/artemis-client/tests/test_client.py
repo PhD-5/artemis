@@ -149,6 +149,27 @@ class ArtemisClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "valid UUID"):
             await self.client.submit("Open Settings", task_id="not-a-uuid")
 
+    async def test_submit_rejects_invalid_input_modes_without_sending(self) -> None:
+        invalid = (
+            ({}, "goal or template_id"),
+            ({"goal": None, "template_id": "  "}, "template_id"),
+            ({"goal": "   "}, "goal"),
+            ({"goal": 123}, "goal"),
+            ({"goal": b"raw"}, "goal"),
+            ({"goal": "raw", "template_id": "saved"}, "mutually exclusive"),
+            ({"goal": "raw", "args": {}}, "args requires template_id"),
+            ({"template_id": 123}, "template_id"),
+            ({"template_id": b"saved"}, "template_id"),
+            ({"template_id": "saved", "args": {"name": 3}}, "args"),
+            ({"template_id": "saved", "args": {3: "value"}}, "args"),
+            ({"template_id": "saved", "args": ["value"]}, "args"),
+            ({"template_id": "saved", "args": {"name": b"value"}}, "args"),
+        )
+        for kwargs, error in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, error):
+                await self.client.submit(**kwargs)
+        self.assertEqual(self.transport.calls, [])
+
     async def test_run_finds_queued_task_then_reads_terminal_session(self) -> None:
         task_id = "00000000-0000-4000-8000-000000000124"
         self.transport.add(

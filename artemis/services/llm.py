@@ -595,8 +595,45 @@ class RobustChatModelWrapper:
 
     def with_structured_output(self, *args, **kwargs):
         if hasattr(self.base_model, "with_structured_output"):
+            call_kwargs = dict(kwargs)
+            schema = args[0] if args else call_kwargs.pop("schema", None)
+            try:
+                from langchain_core.runnables import RunnableLambda
+                from langchain_openai import ChatOpenAI
+
+                # base_model may be wrapped by with_config() (RunnableBinding);
+                # unwrap to the concrete chat model before the provider check.
+                bound_chat = getattr(self.base_model, "bound", self.base_model)
+                if schema is not None and isinstance(bound_chat, ChatOpenAI):
+                    # OpenAI-compatible endpoints with thinking modes (DeepSeek
+                    # V4, ...) reject both the json_schema response_format and a
+                    # forced tool_choice. Tools + tool_choice=auto is the
+                    # portable dialect across such providers.
+                    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+                    bound_model = self.base_model.bind(
+                        tools=[convert_to_openai_tool(schema)],
+                        tool_choice="auto",
+                        parallel_tool_calls=False,
+                    )
+                    def _parse_first_tool_call(ai_msg):
+                        calls = getattr(ai_msg, "tool_calls", None) or []
+                        if not calls:
+                            raise ValueError(
+                                "Structured output: the model returned no tool"
+                                f" call for {getattr(schema, '__name__', schema)}"
+                            )
+                        return schema(**(calls[0].get("args") or {}))
+
+                    return RobustChatModelWrapper(
+                        bound_model | RunnableLambda(_parse_first_tool_call),
+                        self.ctx,
+                        endpoint=self.endpoint,
+                    )
+            except ImportError:
+                pass
             return RobustChatModelWrapper(
-                self.base_model.with_structured_output(*args, **kwargs),
+                self.base_model.with_structured_output(*args, **call_kwargs),
                 self.ctx,
                 endpoint=self.endpoint,
             )
@@ -929,6 +966,7 @@ def _resolve_endpoint(
     return ModelEndpoint(
         provider=ModelProvider.from_string(provider_val),
         model_name=str(model_val),
+        api_base=_get_val(cfg, "base_url", str),
         temperature=_get_val(cfg, "temperature", (int, float)) or 0.0,
         timeout_seconds=_get_val(cfg, "timeout", (int, float)) or 60.0,
         thinking_budget=_get_val(cfg, "thinking_budget", int),

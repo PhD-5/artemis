@@ -75,6 +75,7 @@ try:
     from admin_console.core.state import ServerState, state
     from admin_console.database.connection import db_session, get_db
     from admin_console.database.repositories.session_repository import session_repo
+    from admin_console.database.repositories.task_preset_repository import task_preset_repo
     from admin_console.database.repositories.step_repository import step_repo
     from admin_console.database.repositories.trace_repository import trace_repo
     from admin_console.routers import media, replay, sessions, steps, stream, system, tasks
@@ -83,15 +84,18 @@ try:
     from admin_console.services.media_service import media_service
     from admin_console.services.model_service import model_service
     from admin_console.services.task_queue_service import task_queue_service
+    from admin_console.services.task_preset_catalog import PRESET_TASK_CATALOG
 except ImportError:
     from apps.admin_console.core.security import SameOriginBoundaryMiddleware
     from apps.admin_console.core.state import state
     from apps.admin_console.database.repositories.session_repository import session_repo
     from apps.admin_console.routers import media, replay, sessions, steps, stream, system, tasks
+    from apps.admin_console.database.repositories.task_preset_repository import task_preset_repo
     from apps.admin_console.routers.replay import replay_manager
     from apps.admin_console.services.ipc_service import ipc_service
     from apps.admin_console.services.model_service import model_service
     from apps.admin_console.services.task_queue_service import task_queue_service
+    from apps.admin_console.services.task_preset_catalog import PRESET_TASK_CATALOG
 
 # Initialize language server synchronization address
 init_ls_address()
@@ -121,6 +125,7 @@ app.add_middleware(SameOriginBoundaryMiddleware)
 async def on_startup():
     """Startup lifecycle hooks."""
     state.is_shutting_down = False
+    task_preset_repo.initialize(PRESET_TASK_CATALOG)
     state.shutdown_event.clear()
     write_server_info(
         port=getattr(state, "port", 8000),

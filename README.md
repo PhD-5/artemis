@@ -104,6 +104,19 @@ cd artemis
 
 > **Tip**: Opens `http://localhost:8000` in your default browser with a device connection wizard, live screen mirroring, prompt sandbox, and execution replays. You can also run directly from CLI: `uv run artemis run "Open Settings, find Battery and tell me current level" --profile flash`.
 
+### Web model setup, task templates and device targeting
+
+- **AI Model Setup** recommends DeepSeek and supports DeepSeek, Zhipu, Gemini, OpenAI-compatible endpoints, Anthropic, OpenRouter and xAI. Base URL is readable and editable. Stored API keys are write-only: the API, readiness report and configuration preview return a fixed `********` mask, never a prefix/suffix or the original key. The password field stays empty; leaving it blank when saving preserves the stored key, while entering a new key overwrites it after validation.
+- Provider settings persist in the current installation's `.env` (the repository root for a source checkout; see the displayed `env_path`). Keys are **plaintext on disk**, not encrypted. Provider URLs use `GOOGLE_BASE_URL`, `DEEPSEEK_BASE_URL`, `ZHIPU_BASE_URL`, `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `OPEN_ROUTER_BASE_URL` and `XAI_BASE_URL`. DeepSeek uses `DEEPSEEK_API_KEY` and defaults to `https://api.deepseek.com`; Zhipu uses `ZAI_API_KEY` and defaults to `https://open.bigmodel.cn/api/paas/v4`. **Test configuration** can verify the existing server-side key against an edited URL without returning the key or saving the draft.
+- Saving provider settings does **not** change the selected model. Set `provider: "deepseek"` or `provider: "zhipu"` and the account-supported model name in `config/artemis.jsonc`, including any fallback or node overrides. An explicit model `base_url` takes precedence over the provider URL. New client acquisitions use overwritten credentials; existing running tasks retain their clients. API compatibility is not a guarantee of image/video or specialized grounding support; configure visual nodes with appropriate models.
+- **Recommended Tasks → Manage recommended tasks** provides create, full-list/detail viewing, edit and confirmed delete. Changes persist in SQLite across restarts. Built-in templates are imported once; deleted templates, including a completely empty catalog, are not restored. **Use task** fills the composer without running it.
+- Pro templates can optionally save an **Expected Output** format or schema (`expected_output` in the presets API). **Use task** also fills this field; applying a template without an output preset clears the previous value. Leave it blank for no preset. Flash templates do not show this field.
+- Template app icons use Material Symbols. The editor provides an app-labeled dropdown and a live preview, using the existing app registry and preserving icons already used by saved templates.
+- Setup lists all detected Android devices and their connection/lock status; it no longer selects an active device. Choose **Target Android device** in the Home or Workspace composer. An authorized connected device can accept tasks while locked: after acquiring its execution lock, Artemis wakes it and attempts to dismiss a nonsecure lock screen before initializing UI automation. If a PIN, password or pattern is required, or unlocking cannot be verified, the task fails without entering credentials. A disconnected target requires reselection and never silently switches to another device. Changing the target affects new submissions only, not queued/running tasks.
+- **Active Queue → Cancel queued task** cancels that submission and its device reservation; other queued/running tasks are unaffected. **Stop this task** cancels execution. Deleting a queued session through the API also cancels its reservation before removing history; a starting/running task must finish stopping before its history and artifacts can be deleted (HTTP 409 while still executing). Cancelled/deleted tasks are removed from the live UI cache rather than recreated as running tasks.
+- **Past Runs & History → Retry this task** appears beside Delete when hovering over a failed or cancelled run, in both the desktop list and narrow-screen Task Queue. Retry creates a new run with the original goal, device, Flash/Pro profile, saved Pro tuning, Expected Output and Outputter switch; an explicitly disabled Outputter stays disabled. It neither overwrites the original record nor resumes from the interrupted step. New runs persist output settings in `device_info.output_config`. For older records without these settings, select the template or enter Expected Output in Home and submit again; retry does not infer original settings from the current template. Other launch options that were not persisted use current defaults. Duplicate retries are disabled during submission, and unavailable-device or admission errors appear in the list.
+
+
 <a id="mcp-setup"></a>
 <a id="mcp"></a>
 <details>
@@ -236,6 +249,24 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+Saved templates can run with string arguments instead of a raw goal:
+
+```python
+result = await client.run(template_id="battery-check", args={"APP": "Settings"})
+# Or: handle = await client.submit(template_id="battery-check", args={"APP": "Settings"})
+# result = await client.wait_for_task(handle.task_id)
+```
+
+`goal` and `template_id` cannot be combined; `args` belongs to templates only.
+Provide every declared argument (empty strings are allowed). The server expands
+`${APP}` once, while `$${APP}` stays literal; the SDK never expands arguments.
+An explicit `profile` or `expected_output` overrides the saved template
+(`expected_output=None` or `""` clears it); otherwise the template supplies
+them. Raw goals continue to use `default_profile` (flash by default).
+`Task(goal="...")` defaults to pro,
+whereas `Task(template_id="...", args={...})` inherits the saved profile unless
+its `profile` is set explicitly when passed to `client.run_task(task)`.
+
 </details>
 
 ## Usage Modes
@@ -264,7 +295,7 @@ Set this inside `agent` in `config/artemis.jsonc`:
   "enabled": true,
   "allowed_tools": ["yuri_ping", "yuri_app_is_installed", "yuri_find_text", "yuri_click_text", "yuri_job_poll"],
   "identity": "shell",
-  "compatible_versions": ["1.8.6"]
+  "compatible_versions": ["1.8.6", "1.8.7"]
 }
 ```
 
@@ -272,9 +303,13 @@ Example: `Use Yuri to check whether com.example.app is installed`. Permission al
 
 * **Prerequisites:** install and start compatible YuriClient yourself, with a live `yuri.rpc` service and suitable ROM/SELinux permissions. ARTEMIS never installs, starts, restarts or escalates identity to repair a probe. An explicit request fails clearly if Yuri is unavailable, rather than silently substituting another capability. The distribution's `yuri` is a host wrapper; this plugin invokes the installed APK's Java CLI directly without pushing a script.
 * **Permissions:** `allowed_tools: null` selects queries and OCR clicks; `[]` permits nothing. Modification/reset, install/uninstall, data clear/backup/restore, settings writes, proxies, root shell and duplicate native UI RPC require explicit whitelist entries. See `artemis/tools/yuri.py` for names and parameters. Role `denylisted_tools` applies to declarations and direct calls. Modification/reset additionally requires a valid `ro.yuri.rom.version`.
+* **Modification arguments:** `yuri_device_modify` supports applying a profile before the target app is installed. `brand` is a case-sensitive template name such as `Google_Pixel6` or `Samsung_GalaxyA90`, not a manufacturer name such as `google` or `samsung`.
+* **Client IP (Yuri 1.8.7):** allow `yuri_network_client_ip` and call it with `{}`. It synchronously invokes `network.clientIP` and returns the YuriClient process's public egress IP string, or `null` if both lookup services fail. This is not a LAN address and does not prove the proxy egress of a different app UID. No Job polling is required.
+* **Clash:** `yuri_network_start_clash` takes `{"clash":"<Base64-encoded UTF-8 proxy URL or node YAML>"}`; `yuri_network_stop_clash` takes `{}`. Routing depends on the device's Clash template. These start/stop the Clash process and do not replace the UID redirection performed by `yuri_network_start_proxy` / `yuri_network_stop_proxy`.
 * **Outcomes:** query `false` and OCR miss `null` are valid answers; action `false`, nonzero shell status and Job `failed` or `done/false` are failures. Yuri mutations dispatch once, alone in a turn, without fast bursts or automatic retries. System operations use argument/device preconditions rather than a UI pixel check.
 * **Jobs:** acknowledged submission is followed by bounded completion polling. A polling timeout retains a task-local opaque `job_id` and an unknown outcome; allow `yuri_job_poll` alongside Job tools to resume querying. If submission is not acknowledged, no handle is available and remote execution remains uncertain: never resubmit automatically. Restarting Yuri, switching devices or starting another task invalidates old handles. Cancelling ARTEMIS does not cancel a remote Job.
   Jobs bind to PID, start ticks and executable address bounds, not `boot_id`, which device modification can virtualize. If the ROM protects this process metadata, explicitly configure `identity: "su_brt"` or `"su"`. Unverifiable metadata fails before submission without automatic privilege escalation.
+  `PROCESS_UNAVAILABLE` / `Cannot identify Yuri process for jobs` can mean that shell sees protected code addresses as `1`, not that Yuri is stopped. After changing `agent.yuri.identity`, start a new Web task to load the configuration; running tasks retain their identity, and the Web/API service does not need redeployment.
 * **Arguments/artifacts:** OCR outputs use absolute device pixels; screenshots are retrieved to host artifacts (app-private files may need an explicitly configured root identity). Installation accepts safe device paths or HTTP(S) APK/XAPK URLs without query/fragment. Unsafe command-fragment characters are rejected because JSON quoting cannot fix Yuri's internal shell interpolation. A backup success does not independently verify archive integrity.
 * **Live end-to-end acceptance:** `scripts/yuri_real_device_acceptance.py` runs six proxy, modification and ordinary-task scenarios through production `Agent.run_task(profile="flash"/"pro")` using the configured model, without mocking models or RPC. Acceptance requires actual Yuri actions in runner execution records, a changed exit IP, target-UID-visible properties and no Yuri probe/RPC for ordinary tasks. Root-UID hardware properties or a cached profile alone do not prove modification.
   Run on an online `su_brt` device with running Yuri 1.8.6 and an existing `sec.prop`:

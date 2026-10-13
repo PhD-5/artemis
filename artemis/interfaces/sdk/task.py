@@ -14,7 +14,7 @@
 
 import time
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class StreamEventType:
@@ -41,7 +41,9 @@ class StreamEvent(BaseModel):
 class Task(BaseModel):
     """Configures a single autonomous mobile automation request."""
 
-    goal: str = Field(..., description="High-level goal description")
+    goal: str | None = Field(default=None, description="Raw goal, mutually exclusive with template_id")
+    template_id: str | None = Field(default=None, description="Saved task template identifier")
+    args: dict[str, str] | None = Field(default=None, description="String template arguments")
     profile: Literal["flash", "pro"] = Field(default="pro", description="Execution profile")
     device_id: str = Field(default="default-device", description="Target device serial")
     device_serial: str | None = Field(
@@ -53,6 +55,39 @@ class Task(BaseModel):
     )
     locked_package: str | None = Field(default=None, description="Package lock restriction")
     max_turns: int = Field(default=30, description="Turn cutoff limit")
+
+    @field_validator("goal", "template_id", mode="before")
+    @classmethod
+    def validate_input_strings(cls, value: Any) -> Any:
+        if value is not None and not isinstance(value, str):
+            raise ValueError("goal and template_id must be strings")
+        return value
+
+    @field_validator("args", mode="before")
+    @classmethod
+    def validate_args(cls, value: Any) -> Any:
+        if value is not None and (
+            not isinstance(value, dict)
+            or any(
+                not isinstance(key, str) or not isinstance(arg, str)
+                for key, arg in value.items()
+            )
+        ):
+            raise ValueError("args must contain only string names and values")
+        return value
+
+    @model_validator(mode="after")
+    def validate_input(self) -> "Task":
+        if self.goal is not None:
+            if not self.goal.strip():
+                raise ValueError("goal must not be empty")
+            if self.template_id is not None:
+                raise ValueError("goal and template_id are mutually exclusive")
+            if self.args is not None:
+                raise ValueError("args requires template_id")
+        elif self.template_id is None or not self.template_id.strip():
+            raise ValueError("provide a non-empty goal or template_id")
+        return self
 
     def model_post_init(self, __context: Any) -> None:
         if self.device_serial and self.device_id == "default-device":

@@ -15,12 +15,13 @@
 """System Readiness & Diagnostics Router for Artemis Admin Console."""
 
 import ipaddress
+import json
 import os
 import secrets
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr
 
 from artemis.core.diagnostics import readiness_engine
 from artemis.core.diagnostics.adb_server_connection import (
@@ -28,6 +29,11 @@ from artemis.core.diagnostics.adb_server_connection import (
     adb_server_connection,
 )
 from artemis.core.diagnostics.schema import SystemReadinessReport
+from artemis.config.settings import (
+    PROVIDER_BASE_URL_DEFAULTS,
+    PROVIDER_BASE_URL_FIELDS,
+    normalize_provider_name,
+)
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -92,34 +98,10 @@ def _require_local_lifecycle_request(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Invalid server lifecycle token.")
 
 
-class SelectDeviceRequest(BaseModel):
-    """Payload to select an active target Android device."""
-
-    serial: str = Field(description="Serial number or identifier of the Android device to select")
-
-
 @router.get("/readiness", response_model=SystemReadinessReport)
 async def get_system_readiness(force: bool = False) -> SystemReadinessReport:
     """Execute all diagnostic probes and return a comprehensive system readiness report."""
     return await readiness_engine.run_all(force_refresh=force)
-
-
-@router.post("/devices/select")
-async def select_active_device(request: SelectDeviceRequest):
-    """Select the active Android device or emulator for subsequent automated tasks."""
-    serial = request.serial.strip()
-    if not serial:
-        raise HTTPException(status_code=400, detail="Device serial cannot be empty.")
-
-    readiness_engine.set_probe_target_serial(serial)
-    # Return updated readiness
-    report = await readiness_engine.run_all(force_refresh=True)
-    return {
-        "status": "success",
-        "selected_serial": serial,
-        "report": report,
-    }
-
 
 @router.post("/adb/restart")
 async def restart_adb_server():
@@ -265,9 +247,12 @@ class UpdateCredentialsRequest(BaseModel):
 
     provider: str = Field(
         default="google",
-        description="Provider identifier (e.g. google, gemini, openai, anthropic, openrouter, ocr)",
+        description="Provider identifier (e.g. google, deepseek, zhipu, openai, anthropic, openrouter, ocr)",
     )
-    api_key: str = Field(description="The secret API key string to configure")
+    api_key: SecretStr | None = Field(
+        default=None, description="Write-only key. Omit to preserve; an explicit empty value clears it."
+    )
+    base_url: AnyHttpUrl | None = Field(default=None, description="Provider endpoint to save")
     persist_to_env: bool = Field(
         default=True, description="Whether to persist the key to .env file"
     )
@@ -278,48 +263,86 @@ class ValidateCredentialsRequest(BaseModel):
 
     provider: str = Field(
         default="google",
-        description="Provider identifier (e.g. google, gemini, openai, anthropic, openrouter, ocr)",
+        description="Provider identifier (e.g. google, deepseek, zhipu, openai, anthropic, openrouter, ocr)",
     )
-    api_key: str = Field(description="The secret API key string to test")
-    base_url: str | None = Field(default=None, description="Optional custom base URL")
+    api_key: SecretStr | None = Field(
+        default=None, description="New key to test; omit to use the configured server-side key"
+    )
+    base_url: AnyHttpUrl | None = Field(default=None, description="Optional custom base URL")
+
+
+def _credential_provider(provider: str) -> str:
+    name = normalize_provider_name(provider)
+    if name not in PROVIDER_BASE_URL_DEFAULTS and name != "ocr":
+        raise HTTPException(status_code=400, detail="Unsupported credential provider.")
+    return name
+
+
+def _credential_base_url(value: AnyHttpUrl | None, provider: str) -> str | None:
+    if value is None:
+        return None
+    if provider not in PROVIDER_BASE_URL_FIELDS:
+        raise HTTPException(status_code=400, detail="This provider has no configurable base URL.")
+    if value.username or value.password or value.query or value.fragment:
+        raise HTTPException(
+            status_code=400,
+            detail="Base URL must not contain credentials, a query string or a fragment.",
+        )
+    return str(value).rstrip("/")
+
+
+def _provider_configuration(provider: str) -> dict:
+    from artemis.config import settings
+
+    configured = bool(settings.get_api_key(provider))
+    return {
+        "name": provider,
+        "configured": configured,
+        "base_url": settings.get_base_url(provider) or PROVIDER_BASE_URL_DEFAULTS.get(provider),
+        "api_key": "********" if configured else None,
+    }
+
+
+def _redact_model_config(value):
+    if isinstance(value, dict):
+        result = {}
+        for name, item in value.items():
+            normalized = name.lower().replace("_", "").replace("-", "")
+            secret = normalized.endswith("apikey") or normalized in {
+                "apikeys", "authorization", "accesstoken"
+            }
+            result[name] = "********" if secret and item else _redact_model_config(item)
+        return result
+    if isinstance(value, list):
+        return [_redact_model_config(item) for item in value]
+    return value
 
 
 @router.get("/credentials")
 async def get_credentials():
-    """Report which providers have an API key configured.
-
-    Secret values never leave the process: this endpoint intentionally returns
-    presence booleans only. Keys are written via POST /credentials and used
-    server-side.
-    """
-    from artemis.config import settings
-
-    providers = ("google", "openai", "anthropic", "openrouter", "ocr")
-    status = {name: bool(settings.get_api_key(name)) for name in providers}
-    status["gemini"] = status["google"]
+    """Return readable endpoints and fixed-mask key status, never secret key material."""
     return {
         "providers": [
-            {"name": name, "configured": configured} for name, configured in status.items()
+            _provider_configuration(name) for name in (*PROVIDER_BASE_URL_DEFAULTS, "ocr")
         ]
     }
 
 
 @router.post("/credentials/test")
 async def test_credentials(request: ValidateCredentialsRequest):
-    """Test and verify whether an API key is valid and usable with the corresponding provider endpoint."""
+    """Test a new or existing key without exposing it or persisting changes."""
+    from artemis.config import settings
     from artemis.utils.credentials_validator import validate_api_key
 
-    provider = request.provider.strip().lower()
-    key = request.api_key.strip()
+    provider = _credential_provider(request.provider)
+    base_url = _credential_base_url(request.base_url, provider) or settings.get_base_url(provider)
+    secret = request.api_key if request.api_key is not None else settings.get_api_key(provider)
+    key = secret.get_secret_value().strip() if secret else ""
+    if not key or set(key) == {"*"}:
+        raise HTTPException(status_code=400, detail="No API key configured. Enter a new key to test.")
 
-    if not key:
-        raise HTTPException(status_code=400, detail="API key cannot be empty.")
-
-    is_valid, message = await validate_api_key(
-        provider=provider,
-        api_key=key,
-        base_url=request.base_url,
-    )
+    is_valid, message = await validate_api_key(provider=provider, api_key=key, base_url=base_url)
+    message = message.replace(key, "********")
     if not is_valid:
         raise HTTPException(status_code=400, detail=message)
 
@@ -332,42 +355,48 @@ async def test_credentials(request: ValidateCredentialsRequest):
 
 @router.post("/credentials")
 async def update_credentials(request: UpdateCredentialsRequest):
-    """Dynamically configure and persist LLM or Vision API key, returning updated readiness report."""
+    """Save readable provider endpoints and overwrite-only keys in the canonical dotenv file."""
+    from artemis.config import settings
     from artemis.utils.credentials_validator import validate_api_key
 
-    provider = request.provider.strip().lower()
-    key = request.api_key.strip()
-
-    # If a non-empty key is provided, verify it before saving
+    provider = _credential_provider(request.provider)
+    base_url = _credential_base_url(request.base_url, provider)
+    key = request.api_key.get_secret_value().strip() if request.api_key is not None else None
+    if base_url is None and key is None:
+        raise HTTPException(status_code=400, detail="Provide a base URL or a new API key.")
+    if key and set(key) == {"*"}:
+        raise HTTPException(status_code=400, detail="Enter a new API key, not a masked value.")
     if key:
-        is_valid, validation_msg = await validate_api_key(provider=provider, api_key=key)
-        if not is_valid:
+        valid, message = await validate_api_key(
+            provider=provider, api_key=key, base_url=base_url or settings.get_base_url(provider)
+        )
+        if not valid:
             raise HTTPException(
-                status_code=400,
-                detail=f"API key verification failed: {validation_msg}",
+                status_code=400, detail=f"API key verification failed: {message.replace(key, '********')}"
             )
 
     try:
-        from artemis.config import settings
-
-        settings.set_api_key(provider, key, persist_to_env=request.persist_to_env)
+        if base_url is not None:
+            settings.set_base_url(provider, base_url, persist_to_env=request.persist_to_env)
+        if key is not None:
+            settings.set_api_key(provider, key, persist_to_env=request.persist_to_env)
 
         # Re-run all diagnostic probes to build updated report
         readiness_engine.invalidate_cache()
         updated_report = await readiness_engine.run_all(force_refresh=True)
-        action_desc = (
-            "successfully verified, updated, and applied" if key else "successfully cleared"
-        )
+        action_desc = "updated" if key != "" else "cleared"
         return {
             "status": "success",
-            "message": f"API key for {provider} {action_desc}.",
+            "message": f"Provider configuration for {provider} {action_desc}.",
             "provider": provider,
+            "configuration": _provider_configuration(provider),
             "report": updated_report,
         }
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to update credentials: {exc}")
+        detail = str(exc).replace(key, "********") if key else str(exc)
+        raise HTTPException(status_code=500, detail=f"Failed to update provider configuration: {detail}")
 
 
 @router.get("/model-config-env")
@@ -387,11 +416,12 @@ async def get_model_config_and_env():
     try:
         config_path_obj = get_config_path("artemis.jsonc")
         config_path = str(config_path_obj)
-        config_content = config_path_obj.read_text(encoding="utf-8")
         with open(config_path_obj, encoding="utf-8") as f:
             parsed_config = load_jsonc(f)
-    except Exception as e:
-        config_content = f"// Error reading config: {e}"
+        parsed_config = _redact_model_config(parsed_config)
+        config_content = json.dumps(parsed_config, ensure_ascii=False, indent=2)
+    except Exception:
+        config_content = "// Unable to read model configuration."
 
     # 2. Env file resolution
     env_path = get_env_file()
@@ -407,18 +437,14 @@ async def get_model_config_and_env():
         return None
 
     def mask_key(k: str | None) -> str | None:
-        # Expose only enough to recognize which key is active, never a usable
-        # fragment of the secret itself.
-        if not k:
-            return None
-        if len(k) <= 8:
-            return "****"
-        return f"****{k[-4:]}"
+        return "********" if k else None
 
     gemini_real = get_real_env_value("GEMINI_API_KEY", "google") or get_real_env_value(
         "GOOGLE_API_KEY", "google"
     )
     openai_real = get_real_env_value("OPENAI_API_KEY", "openai")
+    deepseek_real = get_real_env_value("DEEPSEEK_API_KEY", "deepseek")
+    zhipu_real = get_real_env_value("ZAI_API_KEY", "zhipu")
     anthropic_real = get_real_env_value("ANTHROPIC_API_KEY", "anthropic")
     openrouter_real = get_real_env_value("OPEN_ROUTER_API_KEY", "openrouter")
     xai_real = get_real_env_value("XAI_API_KEY", "xai")
@@ -436,6 +462,20 @@ async def get_model_config_and_env():
             "is_set": bool(gemini_real),
             "preview": mask_key(gemini_real),
             "description": "Google Gemini multimodal vision API key (free tier available)",
+        },
+        {
+            "name": "DEEPSEEK_API_KEY",
+            "provider": "deepseek",
+            "is_set": bool(deepseek_real),
+            "preview": mask_key(deepseek_real),
+            "description": "DeepSeek API key",
+        },
+        {
+            "name": "ZAI_API_KEY",
+            "provider": "zhipu",
+            "is_set": bool(zhipu_real),
+            "preview": mask_key(zhipu_real),
+            "description": "Zhipu API key",
         },
         {
             "name": "OPENAI_API_KEY",
@@ -480,6 +520,18 @@ async def get_model_config_and_env():
             "description": "Google Cloud Vision OCR key for screen text detection (optional)",
         },
     ]
+
+    env_vars.extend(
+        {
+            "name": field,
+            "provider": provider,
+            "is_set": bool(settings.get_base_url(provider)),
+            "preview": settings.get_base_url(provider),
+            "description": f"{provider} provider endpoint",
+        }
+        for provider, field in PROVIDER_BASE_URL_FIELDS.items()
+        if provider != "openai"
+    )
 
     return {
         "config_path": config_path or "config/artemis.jsonc",

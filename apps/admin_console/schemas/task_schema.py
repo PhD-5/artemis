@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictStr, model_validator
 
 
 class RunRequest(BaseModel):
     goal: str | None = None
     goals: list[str] | None = None
-    profile: str | None = "flash"
+    template_id: str | None = Field(default=None, min_length=1)
+    args: dict[str, StrictStr] | None = None
+    profile: str | None = None
     expected_output: str | None = None
     enable_outputter: bool | None = None
     # Pro-profile tuning (ignored by the Flash profile): a coarse Checker preset
@@ -32,6 +34,17 @@ class RunRequest(BaseModel):
     ingress: str | None = "frontend"
     session_id: str | None = None
     conversation_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_input_mode(self) -> "RunRequest":
+        if self.template_id is not None:
+            if not self.template_id.strip():
+                raise ValueError("template_id must not be blank")
+            if self.goal is not None or self.goals is not None:
+                raise ValueError("template_id cannot be combined with goal or goals")
+        elif self.args is not None:
+            raise ValueError("args requires template_id")
+        return self
 
 
 class ReplayRequest(BaseModel):

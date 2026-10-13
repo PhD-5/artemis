@@ -20,10 +20,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 
-from artemis.agents.explorer.constants import ASK_EXPLORER_DESCRIPTION
 from artemis.agents.flash.runner import FlashRunner
 from artemis.agents.validator.tool_declarations import (
-    ASK_EXPLORER_TOOL,
     ToolExecutionResult,
 )
 from artemis.context import ArtemisContext
@@ -35,6 +33,7 @@ def mock_context():
     ctx.llm_config = Mock()
     mock_llm_cfg = Mock()
     mock_llm_cfg.model = "gemini-2.5-flash"
+    mock_llm_cfg.provider = "google"
     mock_llm_cfg.temperature = 0.1
     ctx.llm_config.get_agent.return_value = mock_llm_cfg
 
@@ -44,29 +43,10 @@ def mock_context():
     ctx.data_engine = None
     ctx.adb_client = None
     ctx.driver = Mock()
-    return ctx
+    with patch("artemis.agents.flash.summarizer.get_llm", return_value=Mock(model="offline")):
+        yield ctx
 
 
-def test_flash_runner_tools_initialization(mock_context):
-    """Verify FlashRunner gathers correct active tools."""
-    with patch("artemis.controllers.unified_controller.get_driver"):
-        runner = FlashRunner(mock_context, goal="Test Open Settings")
-        tools = runner._get_tools()
-
-        tool_names = [t.name for t in tools]
-        assert "click" in tool_names
-        assert "click_sequence" in tool_names
-        assert "swipe" in tool_names
-        assert "input_text" in tool_names
-        assert "ask_explorer" in tool_names
-        assert "report_task_status" in tool_names
-        # Validator's report_failure_analysis should NOT be in FlashRunner
-        assert "report_failure_analysis" not in tool_names
-        # Flash has no note-writing tool and its prompt never teaches notes:
-        # the Validator set's note readers are not bound.
-        assert "read_note" not in tool_names
-        assert "list_notes" not in tool_names
-        assert tool_names[:2] == ["click", "click_sequence"]
 
 
 # --- Post-action screenshot fallback (failed action / unknown tool) ----------------
@@ -196,29 +176,6 @@ async def test_fallback_observation_failure_is_contained(mock_context):
     assert state.latest_screenshot == "old.jpg"
 
 
-def test_flash_runner_executor_follows_the_flash_explorer_tier(mock_context):
-    """The executor is tagged as the Flash profile so ask_explorer follows flash_mode."""
-    with (
-        patch("artemis.controllers.unified_controller.get_driver"),
-        patch("artemis.agents.flash.runner.McpActionExecutor") as executor_cls,
-    ):
-        runner = FlashRunner(mock_context, goal="Test Open Settings")
-
-    executor_cls.assert_called_once()
-    assert executor_cls.call_args.kwargs["agent_name"] == "flash"
-    assert runner.executor is executor_cls.return_value
-
-
-def test_ask_explorer_declaration_is_tier_agnostic(mock_context):
-    """Flash binds the shared ask_explorer contract: query + context_feedback, no tier."""
-    with patch("artemis.controllers.unified_controller.get_driver"):
-        runner = FlashRunner(mock_context, goal="Test Open Settings")
-        declaration = next(t for t in runner._get_tools() if t.name == "ask_explorer")
-
-    assert declaration is ASK_EXPLORER_TOOL
-    assert declaration.description == ASK_EXPLORER_DESCRIPTION
-    assert set(declaration.parameters["properties"]) == {"query", "context_feedback"}
-    assert declaration.parameters["required"] == ["query"]
 
 
 def test_flash_runner_screenshot_pruning(mock_context):

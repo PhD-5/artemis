@@ -57,6 +57,7 @@ class LLM(BaseModel):
     model_config = {"ignored_types": (CyFunctionDetector,)}
     provider: LLMProvider
     model: str
+    base_url: str | None = None
     temperature: float | None = None
     thinking_budget: int | None = None
     thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
@@ -69,6 +70,12 @@ class LLM(BaseModel):
         if self.provider == "openai":
             if not settings.OPENAI_API_KEY:
                 raise Exception(f"{name} requires OPENAI_API_KEY in .env")
+        elif self.provider == "deepseek":
+            if not settings.get_api_key("deepseek"):
+                raise Exception(f"{name} requires DEEPSEEK_API_KEY in .env")
+        elif self.provider == "zhipu":
+            if not settings.get_api_key("zhipu"):
+                raise Exception(f"{name} requires ZAI_API_KEY in .env")
         elif self.provider == "google":
             if not settings.GOOGLE_API_KEY:
                 raise Exception(f"{name} requires GOOGLE_API_KEY in .env")

@@ -17,7 +17,7 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
@@ -27,6 +27,7 @@ from artemis.config.constants import (
     DEFAULT_MODEL,
     DEFAULT_PROFILE,
     ENV_ANTHROPIC_API_KEY,
+    ENV_DEEPSEEK_API_KEY,
     ENV_DATA_ENGINE_DB_PATH,
     ENV_GCP_API_KEY,
     ENV_GEMINI_API_KEY,
@@ -36,6 +37,7 @@ from artemis.config.constants import (
     ENV_OPENAI_API_KEY,
     ENV_VISION_API_KEY,
     ENV_XAI_API_KEY,
+    ENV_ZAI_API_KEY,
 )
 from artemis.config.paths import (
     GLOBAL_APP_DIR,
@@ -44,7 +46,6 @@ from artemis.config.paths import (
     get_env_file,
     get_temp_dir,
 )
-from third_party.mobile_use.utils.logger import get_logger
 
 # Installed wheels load .env from the user directory, outside site-packages.
 _canonical_env = get_env_file()
@@ -53,7 +54,6 @@ _global_env = GLOBAL_APP_DIR / ".env"
 if _global_env.exists() and _global_env.resolve() != _canonical_env.resolve():
     load_dotenv(dotenv_path=_global_env, verbose=True)
 
-logger = get_logger(__name__)
 
 
 def is_placeholder_key(val: str | SecretStr | None) -> bool:
@@ -89,11 +89,44 @@ def is_placeholder_key(val: str | SecretStr | None) -> bool:
     return False
 
 
+PROVIDER_BASE_URL_DEFAULTS = {
+    "google": "https://generativelanguage.googleapis.com",
+    "deepseek": "https://api.deepseek.com",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "xai": "https://api.x.ai/v1",
+}
+PROVIDER_BASE_URL_FIELDS = {
+    "google": "GOOGLE_BASE_URL",
+    "deepseek": "DEEPSEEK_BASE_URL",
+    "zhipu": "ZHIPU_BASE_URL",
+    "openai": "OPENAI_BASE_URL",
+    "anthropic": "ANTHROPIC_BASE_URL",
+    "openrouter": "OPEN_ROUTER_BASE_URL",
+    "xai": "XAI_BASE_URL",
+}
+
+
+def normalize_provider_name(provider: str) -> str:
+    from artemis.llm.google.provider import is_google_family_provider
+
+    name = provider.strip().lower()
+    if is_google_family_provider(name):
+        return "google"
+    return {
+        "claude": "anthropic", "grok": "xai", "vision": "ocr", "google_vision": "ocr"
+    }.get(name, name)
+
+
 class Settings(BaseSettings):
     """Centralized ARTEMIS runtime settings loaded from environment and .env files."""
 
     # LLM Provider Authentication
     OPENAI_API_KEY: SecretStr | None = None
+    DEEPSEEK_API_KEY: SecretStr | None = None
+    ZAI_API_KEY: SecretStr | None = None
     GOOGLE_API_KEY: SecretStr | None = None
     GEMINI_API_KEY: SecretStr | None = None
     GCP_API_KEY: SecretStr | None = None
@@ -108,6 +141,12 @@ class Settings(BaseSettings):
 
     # Custom Provider Endpoints
     OPENAI_BASE_URL: str | None = None
+    DEEPSEEK_BASE_URL: str | None = None
+    ZHIPU_BASE_URL: str | None = None
+    GOOGLE_BASE_URL: str | None = None
+    ANTHROPIC_BASE_URL: str | None = None
+    OPEN_ROUTER_BASE_URL: str | None = None
+    XAI_BASE_URL: str | None = None
 
     # Android ADB Connectivity
     ADB_HOST: str | None = Field(default=DEFAULT_ADB_HOST)
@@ -158,6 +197,8 @@ class Settings(BaseSettings):
         # Sanitize any placeholder values loaded from environment or .env
         for attr in (
             "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "ZAI_API_KEY",
             "GOOGLE_API_KEY",
             "GEMINI_API_KEY",
             "GCP_API_KEY",
@@ -183,6 +224,25 @@ class Settings(BaseSettings):
             self.OCR_API_KEY = self.VISION_API_KEY
         return self
 
+    def get_base_url(self, provider: str) -> str | None:
+        """Return a provider-specific override; unset providers retain SDK defaults."""
+        attr = PROVIDER_BASE_URL_FIELDS.get(normalize_provider_name(provider))
+        value = getattr(self, attr, None) if attr else None
+        return value.strip().rstrip("/") if value and value.strip() else None
+
+    def set_base_url(self, provider: str, value: str, persist_to_env: bool = False) -> None:
+        name = normalize_provider_name(provider)
+        attr = PROVIDER_BASE_URL_FIELDS.get(name)
+        if not attr:
+            raise ValueError("This provider does not support a configurable base URL.")
+        value = value.strip().rstrip("/")
+        if not value:
+            raise ValueError("Base URL cannot be empty.")
+        if persist_to_env:
+            self._persist_env_values({attr: value})
+        setattr(self, attr, value)
+        os.environ[attr] = value
+
     def get_api_key(self, provider: str) -> SecretStr | None:
         """Get API key for a specified provider.
 
@@ -202,6 +262,10 @@ class Settings(BaseSettings):
             key = self.OCR_API_KEY or self.VISION_API_KEY
         elif provider_lower == "openai":
             key = self.OPENAI_API_KEY
+        elif provider_lower == "deepseek":
+            key = self.DEEPSEEK_API_KEY
+        elif provider_lower == "zhipu":
+            key = self.ZAI_API_KEY
         elif provider_lower in ("anthropic", "claude"):
             key = self.ANTHROPIC_API_KEY
         elif provider_lower == "openrouter":
@@ -239,6 +303,14 @@ class Settings(BaseSettings):
             self.OPENAI_API_KEY = secret
             env_key_name = ENV_OPENAI_API_KEY
             os.environ[ENV_OPENAI_API_KEY] = key
+        elif provider_lower == "deepseek":
+            self.DEEPSEEK_API_KEY = secret
+            env_key_name = ENV_DEEPSEEK_API_KEY
+            os.environ[ENV_DEEPSEEK_API_KEY] = key
+        elif provider_lower == "zhipu":
+            self.ZAI_API_KEY = secret
+            env_key_name = ENV_ZAI_API_KEY
+            os.environ[ENV_ZAI_API_KEY] = key
         elif provider_lower in ("anthropic", "claude"):
             self.ANTHROPIC_API_KEY = secret
             env_key_name = ENV_ANTHROPIC_API_KEY
@@ -259,52 +331,20 @@ class Settings(BaseSettings):
             os.environ[ENV_VISION_API_KEY] = key
 
         if persist_to_env and env_key_name:
-            target_env_files = [get_env_file()]
-            seen_paths = set()
-            for env_file in target_env_files:
-                try:
-                    env_file.parent.mkdir(parents=True, exist_ok=True)
-                    resolved = env_file.resolve()
-                    if resolved in seen_paths:
-                        continue
-                    seen_paths.add(resolved)
+            keys_to_update = [env_key_name]
+            if is_google_family_provider(provider_lower):
+                keys_to_update = [ENV_GEMINI_API_KEY, ENV_GOOGLE_API_KEY, ENV_GCP_API_KEY]
+            elif provider_lower in ("ocr", "vision", "google_vision"):
+                keys_to_update = [ENV_OCR_API_KEY, ENV_VISION_API_KEY]
+            self._persist_env_values(dict.fromkeys(keys_to_update, key))
 
-                    lines = []
-                    if env_file.exists():
-                        lines = env_file.read_text(encoding="utf-8").splitlines()
-
-                    # Determine keys to update
-                    keys_to_update = [env_key_name]
-                    if is_google_family_provider(provider_lower):
-                        keys_to_update = [ENV_GEMINI_API_KEY, ENV_GOOGLE_API_KEY, ENV_GCP_API_KEY]
-                    elif provider_lower in ("ocr", "vision", "google_vision"):
-                        keys_to_update = [ENV_OCR_API_KEY, ENV_VISION_API_KEY]
-
-                    new_lines = []
-                    updated_set = set()
-                    for line in lines:
-                        replaced = False
-                        for k in keys_to_update:
-                            if (
-                                line.startswith(f"{k}=")
-                                or line.startswith(f"#{k}=")
-                                or line.startswith(f"# {k}=")
-                            ):
-                                new_lines.append(f"{k}={key}")
-                                updated_set.add(k)
-                                replaced = True
-                                break
-                        if not replaced:
-                            new_lines.append(line)
-
-                    # Ensure the primary key is present if not replaced
-                    primary_key = keys_to_update[0]
-                    if primary_key not in updated_set:
-                        new_lines.append(f"{primary_key}={key}")
-
-                    env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                except Exception as e:
-                    logger.warning(f"Could not persist {env_key_name} to {env_file}: {e}")
+    @staticmethod
+    def _persist_env_values(values: dict[str, str]) -> None:
+        """Persist dotenv values without exposing them or losing quoting on reload."""
+        env_file = get_env_file()
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        for name, value in values.items():
+            set_key(str(env_file), name, value, quote_mode="auto")
 
 
 # Singleton instance

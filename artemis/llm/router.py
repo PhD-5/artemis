@@ -39,6 +39,8 @@ class ModelProvider(StrEnum):
     GEMINI = "google"
     VERTEX_AI = "vertexai"
     OPENAI = "openai"
+    DEEPSEEK = "deepseek"
+    ZHIPU = "zhipu"
     ANTHROPIC = "anthropic"
     OPENROUTER = "openrouter"
     XAI = "xai"
@@ -67,6 +69,8 @@ class ModelProvider(StrEnum):
             "vertexai": cls.VERTEX_AI,
             "vertex": cls.VERTEX_AI,
             "openai": cls.OPENAI,
+            "deepseek": cls.DEEPSEEK,
+            "zhipu": cls.ZHIPU,
             "anthropic": cls.ANTHROPIC,
             "claude": cls.ANTHROPIC,
             "openrouter": cls.OPENROUTER,
@@ -202,7 +206,20 @@ class ModelFactory:
 
     @classmethod
     def get_model(cls, endpoint: ModelEndpoint) -> BaseChatModel:
-        key = endpoint.cache_key()
+        provider = ModelProvider.from_string(endpoint.provider)
+        configurable = provider in (
+            ModelProvider.GOOGLE,
+            ModelProvider.OPENAI,
+            ModelProvider.DEEPSEEK,
+            ModelProvider.ZHIPU,
+            ModelProvider.ANTHROPIC,
+            ModelProvider.OPENROUTER,
+            ModelProvider.XAI,
+        )
+        base_url = settings.get_base_url(provider.value) if configurable and not endpoint.api_base else None
+        # SecretStr masks cache representations and rotates clients after a key overwrite.
+        saved_key = settings.get_api_key(provider.value) if configurable and not endpoint.api_key else None
+        key = (*endpoint.cache_key(), base_url, saved_key)
         if key not in cls._cache:
             cls._cache[key] = cls.create_model(endpoint)
         return cls._cache[key]
@@ -235,6 +252,7 @@ class ModelFactory:
                 or os.environ.get("GOOGLE_API_KEY")
                 or os.environ.get("GEMINI_API_KEY")
             )
+            base_url = endpoint.api_base or settings.get_base_url(provider.value)
             # Gemini 1.x/2.x only understand thinking_budget.
             thinking_level = (
                 endpoint.thinking_level if supports_thinking_level(endpoint.model_name) else None
@@ -246,6 +264,7 @@ class ModelFactory:
                 "max_output_tokens": endpoint.max_tokens,
                 "api_key": api_key,
                 "timeout": endpoint.timeout_seconds,
+                "base_url": base_url,
                 "thinking_budget": endpoint.thinking_budget,
                 "thinking_level": thinking_level,
                 "include_thoughts": endpoint.include_thoughts,
@@ -288,9 +307,7 @@ class ModelFactory:
                 or (settings.OPENAI_API_KEY.get_secret_value() if settings.OPENAI_API_KEY else None)
                 or os.environ.get("OPENAI_API_KEY", "EMPTY")
             )
-            base_url = endpoint.api_base or (
-                str(settings.OPENAI_BASE_URL) if settings.OPENAI_BASE_URL else None
-            )
+            base_url = endpoint.api_base or settings.get_base_url(provider.value)
             kwargs = {
                 "model": endpoint.model_name,
                 "temperature": endpoint.temperature,
@@ -303,6 +320,33 @@ class ModelFactory:
                 kwargs["reasoning_effort"] = endpoint.reasoning_effort
             return ChatOpenAI(**{k: v for k, v in kwargs.items() if v is not None})
 
+        elif provider in (ModelProvider.DEEPSEEK, ModelProvider.ZHIPU):
+            from langchain_openai import ChatOpenAI
+
+            key = settings.get_api_key(provider.value)
+            api_key = endpoint.api_key or (key.get_secret_value() if key else None)
+            if not api_key:
+                key_name = "DEEPSEEK_API_KEY" if provider == ModelProvider.DEEPSEEK else "ZAI_API_KEY"
+                raise ValueError(f"{provider.value} requires {key_name}")
+            # Explicitly pass both values: ChatOpenAI must never inherit OpenAI's
+            # key or host for these independent native providers.
+            kwargs = {
+                "model": endpoint.model_name,
+                "temperature": endpoint.temperature,
+                "max_tokens": endpoint.max_tokens,
+                "api_key": api_key,
+                "base_url": endpoint.api_base
+                or settings.get_base_url(provider.value)
+                or (
+                    "https://api.deepseek.com"
+                    if provider == ModelProvider.DEEPSEEK
+                    else "https://open.bigmodel.cn/api/paas/v4"
+                ),
+                "timeout": endpoint.timeout_seconds,
+            }
+            if endpoint.reasoning_effort:
+                kwargs["reasoning_effort"] = endpoint.reasoning_effort
+            return ChatOpenAI(**{k: v for k, v in kwargs.items() if v is not None})
         elif provider == ModelProvider.ANTHROPIC:
             from langchain_anthropic import ChatAnthropic
 
@@ -320,6 +364,7 @@ class ModelFactory:
                 "temperature": endpoint.temperature,
                 "api_key": api_key,
                 "timeout": endpoint.timeout_seconds,
+                "base_url": endpoint.api_base or settings.get_base_url(provider.value),
             }
             budget = endpoint.thinking_budget
             if not budget and endpoint.reasoning_effort:
@@ -346,7 +391,9 @@ class ModelFactory:
                 model=endpoint.model_name,
                 temperature=endpoint.temperature,
                 api_key=api_key,
-                base_url=endpoint.api_base or "https://openrouter.ai/api/v1",
+                base_url=endpoint.api_base
+                or settings.get_base_url(provider.value)
+                or "https://openrouter.ai/api/v1",
                 timeout=endpoint.timeout_seconds,
             )
 
@@ -362,7 +409,9 @@ class ModelFactory:
                 model=endpoint.model_name,
                 temperature=endpoint.temperature,
                 api_key=api_key,
-                base_url=endpoint.api_base or "https://api.x.ai/v1",
+                base_url=endpoint.api_base
+                or settings.get_base_url(provider.value)
+                or "https://api.x.ai/v1",
                 timeout=endpoint.timeout_seconds,
             )
 

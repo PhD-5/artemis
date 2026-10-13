@@ -1769,67 +1769,34 @@ $text-light: #94a3b8;
               box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
               animation: statusDotPulse 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
             }
-          }
 
-        }
-
-        .multi-device-switcher {
-          display: flex;
-          flex-direction: column;
-          gap: 5px;
-
-          .switcher-label {
-            font-size: 11px;
-            font-weight: 700;
-            color: $text-muted;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-          }
-
-          .switcher-chips {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-
-            .device-chip-btn {
-              display: inline-flex;
-              align-items: center;
-              gap: 5px;
-              padding: 0 10px;
-              height: 30px;
-              background: #ffffff;
-              border: 1px solid $card-border;
-              border-radius: 6px;
-              font-family: inherit;
-              font-size: 11.5px;
-              font-weight: 600;
-              color: $text-secondary;
-              cursor: pointer;
-              transition: all 0.15s ease;
-
-              .chip-icon {
-                font-size: 14px;
+            &.lock-state {
+              color: $text-muted;
+              .status-dot {
+                background: $text-muted;
+                box-shadow: none;
+                animation: none;
               }
-
-              .active-check {
-                color: $emerald;
-                font-size: 10.5px;
-                font-weight: 700;
-              }
-
-              &.selected {
-                background: $emerald-light;
-                border-color: $emerald;
-                color: $emerald;
-              }
-
-              &:hover:not(.selected) {
-                background: #f8fafc;
-                border-color: $card-border-hover;
+            }
+            &.not-ready {
+              color: #b45309;
+              .status-dot {
+                background: #f59e0b;
+                box-shadow: none;
+                animation: none;
               }
             }
           }
+
         }
+        .device-lock-info {
+          margin: -4px 0 4px;
+          padding: 0 12px;
+          color: $text-muted;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
       }
 
       /* Live Emulator Boot Tracker & Diagnostic Card */
@@ -3415,11 +3382,9 @@ $text-light: #94a3b8;
         }
       }
 
-      /* State C: Locked / Unauthorized Device Panels */
-      .unauthorized-panel,
-      .device-locked-panel {
-        .unauthorized-card,
-        .device-locked-card {
+      /* State C: Unauthorized Device Panel */
+      .unauthorized-panel {
+        .unauthorized-card {
           display: flex;
           align-items: center;
           gap: 12px;
@@ -3434,29 +3399,25 @@ $text-light: #94a3b8;
             flex-shrink: 0;
           }
 
-          .unauth-details,
-          .locked-details {
+          .unauth-details {
             flex: 1;
             min-width: 0;
 
-            .unauth-title,
-            .locked-title {
+            .unauth-title {
               font-size: 13px;
               font-weight: 600;
               color: $amber-dark;
               margin-bottom: 2px;
             }
 
-            .unauth-desc,
-            .locked-desc {
+            .unauth-desc {
               font-size: 11.5px;
               color: #78350f;
               line-height: 1.4;
             }
           }
 
-          .btn-retry-auth,
-          .btn-check-unlock {
+          .btn-retry-auth {
             display: inline-flex;
             align-items: center;
             gap: 4px;
@@ -3941,6 +3902,76 @@ $text-light: #94a3b8;
               cursor: not-allowed;
             }
           }
+        }
+
+        .template-composer {
+          display: grid;
+          gap: 12px;
+          padding-bottom: 14px;
+
+          .template-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            color: $text-main;
+          }
+
+          .template-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+          .template-heading { flex-wrap: wrap; }
+          .template-id { margin: 0; font-size: 12px; color: $text-secondary; overflow-wrap: anywhere; }
+          .template-id code { margin-left: 6px; user-select: text; color: $text-main; }
+
+          .template-heading button {
+            padding: 7px 10px;
+            border: 1px solid $primary-border;
+            border-radius: 8px;
+            background: $primary-light;
+            color: $primary-dark;
+            cursor: pointer;
+          }
+
+          .template-heading button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+          .template-parameter {
+            display: grid;
+            gap: 4px;
+            color: $text-main;
+            font-size: 13px;
+          }
+
+          .required-label, .template-hint { color: $text-secondary; font-size: 12px; }
+          .template-hint { margin: 0; }
+          .template-parameter input, .template-preview {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 9px 11px;
+            border: 1px solid $card-border-hover;
+            border-radius: 8px;
+            background: #ffffff;
+            color: $text-main;
+            font: inherit;
+          }
+
+          .template-parameter input:focus-visible, .template-heading button:focus-visible, .template-output:focus-visible {
+            outline: 2px solid $primary;
+            outline-offset: 2px;
+          }
+
+          .template-preview-label { font-size: 13px; font-weight: 600; color: $text-main; }
+          .template-preview { min-height: 90px; resize: vertical; background: $bg-base; }
+          .template-output { min-height: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+          .template-use-empty {
+            justify-self: start;
+            padding: 5px 9px;
+            border: 1px solid $card-border-hover;
+            border-radius: 8px;
+            background: #ffffff;
+            color: $primary-dark;
+            cursor: pointer;
+          }
+          .template-use-empty:focus-visible { outline: 2px solid $primary; outline-offset: 2px; }
+          .template-use-empty:disabled { cursor: not-allowed; opacity: 0.5; }
         }
 
         /* Contextual Model Descriptor Strip (Flash & Pro) */
@@ -4962,7 +4993,9 @@ $text-light: #94a3b8;
                 text-overflow: ellipsis;
               }
 
-              .use-prompt-action {
+              .card-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+              .copy-prompt-action, .use-prompt-action {
                 display: inline-flex;
                 align-items: center;
                 gap: 3px;
@@ -4972,6 +5005,15 @@ $text-light: #94a3b8;
                 opacity: 0.85;
                 transition: all 0.15s ease;
                 flex-shrink: 0;
+                border: none;
+                border-radius: 4px;
+                background: transparent;
+                padding: 4px;
+                font-family: inherit;
+                cursor: pointer;
+
+                &:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+                .material-symbols-outlined { font-size: 13px; }
 
                 .action-arrow {
                   font-size: 13px;

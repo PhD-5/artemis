@@ -304,7 +304,22 @@ $text-muted: #a1a1aa;
           }
 
           .btn-delete-card,
+          .btn-retry-card,
           .btn-stop-card {
+            opacity: 1;
+            pointer-events: auto;
+          }
+        }
+      }
+
+      &:focus-within {
+        .task-card-header-actions {
+          .task-time,
+          .task-time-divider {
+            opacity: 0;
+          }
+          .btn-delete-card,
+          .btn-retry-card {
             opacity: 1;
             pointer-events: auto;
           }
@@ -476,7 +491,8 @@ $text-muted: #a1a1aa;
             transition: opacity 0.15s ease;
           }
 
-          .btn-delete-card {
+          .btn-delete-card,
+          .btn-retry-card {
             position: absolute;
             right: 0;
             top: 50%;
@@ -509,6 +525,16 @@ $text-muted: #a1a1aa;
             &:disabled {
               opacity: 0.3;
               cursor: not-allowed;
+            }
+          }
+
+          .btn-retry-card {
+            right: 24px;
+            color: #2563eb;
+
+            &:hover:not(:disabled) {
+              color: #1d4ed8;
+              background: #dbeafe;
             }
           }
 
@@ -1168,4 +1194,12 @@ $text-muted: #a1a1aa;
       }
     }
   }
+}
+
+.retry-error {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
 }

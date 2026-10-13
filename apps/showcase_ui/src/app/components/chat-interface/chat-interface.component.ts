@@ -17,7 +17,8 @@
 import { Component, ChangeDetectionStrategy, inject, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { AgentService } from '../../services/agent.service';
+import { AgentService, taskErrorDetail } from '../../services/agent.service';
+import { SystemService } from '../../services/system.service';
 import { Session } from '../../core/models/session.model';
 import { MarkdownSegment, MarkdownLine, NoteMilestone, ParsedNote } from '../../core/models/markdown.model';
 import { parseNote, parseNoteLines } from '../../utils/markdown-parser.util';
@@ -34,6 +35,7 @@ export type { MarkdownSegment, MarkdownLine, NoteMilestone, ParsedNote };
 })
 export class ChatInterfaceComponent {
   public agentService = inject(AgentService);
+  public systemService = inject(SystemService);
 
   public taskInput: string = '';
   // Signals so async completion handlers refresh this OnPush view.
@@ -78,14 +80,20 @@ export class ChatInterfaceComponent {
    */
   public submitTask(): void {
     const goal = this.taskInput.trim();
-    if (!goal) {
+    if (!goal || this.isSubmitting()) {
+      return;
+    }
+    if (!this.systemService.canSubmitTask()) {
+      this.errorMessage.set(this.systemService.taskDeviceIssue() || 'Complete System Setup before running.');
       return;
     }
 
     this.isSubmitting.set(true);
     this.errorMessage.set(null);
 
-    this.agentService.runTask(goal).subscribe({
+    this.agentService.runTask({
+      goal, profile: 'flash', deviceSerial: this.systemService.selectedTaskDevice()?.serial
+    }).subscribe({
       next: (res) => {
         this.taskInput = '';
         this.isSubmitting.set(false);
@@ -95,7 +103,7 @@ export class ChatInterfaceComponent {
       error: (err) => {
         console.error('Failed to submit task:', err);
         this.isSubmitting.set(false);
-        this.errorMessage.set(err.error?.detail || 'The runner is busy. Please wait for the current task to finish.');
+        this.errorMessage.set(taskErrorDetail(err.error?.detail) || 'The runner is busy. Please wait for the current task to finish.');
         // Auto-dismiss error banner after 5 seconds
         setTimeout(() => {
           this.errorMessage.set(null);

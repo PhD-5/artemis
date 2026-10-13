@@ -16,7 +16,7 @@ import asyncio
 from contextlib import suppress
 import json
 from typing import Any
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from artemis.core.diagnostics import readiness_engine
 from artemis.runtime import DeviceExecutionLock, device_pool
@@ -24,19 +24,25 @@ from artemis.runtime import DeviceExecutionLock, device_pool
 try:
     from admin_console.core.state import state
     from admin_console.database.repositories.session_repository import session_repo
+    from admin_console.database.repositories.task_preset_repository import task_preset_repo
+    from admin_console.schemas.task_preset_schema import TaskPreset, TaskPresetInput
     from admin_console.schemas.task_schema import RunRequest
     from admin_console.services.ipc_service import ipc_service
     from admin_console.services.model_service import model_service
     from admin_console.services.task_preset_catalog import task_recommendation_engine
     from admin_console.services.task_queue_service import task_queue_service
+    from admin_console.services.task_template import render_task_template
 except ImportError:
     from apps.admin_console.core.state import state
     from apps.admin_console.database.repositories.session_repository import session_repo
+    from apps.admin_console.database.repositories.task_preset_repository import task_preset_repo
+    from apps.admin_console.schemas.task_preset_schema import TaskPreset, TaskPresetInput
     from apps.admin_console.schemas.task_schema import RunRequest
     from apps.admin_console.services.ipc_service import ipc_service
     from apps.admin_console.services.model_service import model_service
     from apps.admin_console.services.task_preset_catalog import task_recommendation_engine
     from apps.admin_console.services.task_queue_service import task_queue_service
+    from apps.admin_console.services.task_template import render_task_template
 
 
 router = APIRouter(tags=["tasks"])
@@ -49,7 +55,7 @@ async def get_task_presets(
     limit: int = 24,
 ):
     """Retrieve smart task recommendations optionally tailored to detected device packages."""
-    pkg_list = [p.strip() for p in packages.split(",") if p.strip()] if packages else None
+    pkg_list = [p.strip() for p in packages.split(",") if p.strip()] if packages else []
     return task_recommendation_engine.recommend_tasks(
         installed_packages=pkg_list,
         category=category,
@@ -59,11 +65,39 @@ async def get_task_presets(
 
 @router.get("/api/tasks/catalog")
 async def get_task_catalog():
-    """Retrieve full catalog of predefined tasks and app package registry."""
+    """Retrieve the entire persisted catalog and app package registry."""
     return {
-        "tasks": [t.model_dump() for t in task_recommendation_engine.get_all_tasks()],
+        "tasks": task_recommendation_engine.get_all_tasks(),
         "app_registry": task_recommendation_engine.get_app_registry(),
     }
+
+
+@router.post("/api/tasks/presets", response_model=TaskPreset, status_code=status.HTTP_201_CREATED)
+async def create_task_preset(payload: TaskPresetInput):
+    return task_preset_repo.create(payload)
+
+
+@router.get("/api/tasks/presets/{preset_id}", response_model=TaskPreset)
+async def get_task_preset(preset_id: str):
+    task = task_preset_repo.get(preset_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task preset not found")
+    return task
+
+
+@router.put("/api/tasks/presets/{preset_id}", response_model=TaskPreset)
+async def update_task_preset(preset_id: str, payload: TaskPresetInput):
+    task = task_preset_repo.update(preset_id, payload)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task preset not found")
+    return task
+
+
+@router.delete("/api/tasks/presets/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task_preset(preset_id: str):
+    if not task_preset_repo.delete(preset_id):
+        raise HTTPException(status_code=404, detail="Task preset not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/api/run")
@@ -74,17 +108,17 @@ async def run_task(request: RunRequest):
     elif request.goal:
         incoming_goals = [request.goal]
 
-    if not incoming_goals:
+    if not incoming_goals and request.template_id is None:
         raise HTTPException(
             status_code=400,
-            detail="Either 'goal' or 'goals' list must be provided.",
+            detail="Either 'goal', 'goals' list, or 'template_id' must be provided.",
         )
 
     # Idempotent SDK retries must never re-run device readiness checks. A task
     # can hold the device while its admission response is lost in transit; in
     # that state, probing the same device again may fail or block even though
     # the original task was accepted successfully.
-    if request.session_id and len(incoming_goals) == 1:
+    if request.session_id and (request.template_id is not None or len(incoming_goals) == 1):
         requested_sid = str(request.session_id)
         existing_item = next(
             (
@@ -102,8 +136,12 @@ async def run_task(request: RunRequest):
         if existing_item or persisted_session or is_active:
             task_payload = dict(existing_item or persisted_session or {})
             task_payload.setdefault("session_id", requested_sid)
-            task_payload.setdefault("goal", incoming_goals[0])
-            task_payload.setdefault("profile", request.profile or "flash")
+            if "initial_goal" in task_payload:
+                task_payload.setdefault("goal", task_payload["initial_goal"])
+            elif incoming_goals:
+                task_payload.setdefault("goal", incoming_goals[0])
+            if request.template_id is None:
+                task_payload.setdefault("profile", request.profile or "flash")
             task_payload.setdefault("device_serial", request.device_serial)
             task_payload.setdefault("status", "running" if is_active else "queued")
             return {
@@ -112,6 +150,22 @@ async def run_task(request: RunRequest):
                 "enqueued_count": 0,
                 "total_queued": len(state.queue_tasks),
             }
+
+    profile = request.profile or "flash"
+    expected_output = request.expected_output
+    if request.template_id is not None:
+        template = task_preset_repo.get(request.template_id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="Task template not found")
+        try:
+            incoming_goals = [
+                render_task_template(template.goal, template.parameters, request.args or {})
+            ]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        profile = request.profile or template.profile
+        if "expected_output" not in request.model_fields_set:
+            expected_output = template.expected_output
 
     # Reject an explicit unknown/offline target before running the more
     # expensive readiness probe. Besides producing a stable SDK response,
@@ -133,29 +187,14 @@ async def run_task(request: RunRequest):
                 "total_queued": len(state.queue_tasks),
             }
 
-    # Re-check immediately before enqueueing so a device locked between UI
-    # polling intervals cannot start through a stale Ready state. Use the
-    # bounded submission probe: the full diagnostics path also scans packages,
-    # emulator installations, Android version, and screen size.
-    # With no explicit serial the probe itself resolves a live target (it
-    # prefers the diagnostics target preference, then any unlocked ready
-    # device); the verified serial is bound below.
+    # Resolve and verify connectivity before enqueueing. Lock-screen state is
+    # informational here: the worker attempts unlocking after acquiring the
+    # device execution lock and records an unremovable secure lock as failure.
+    # The bounded probe also resolves a live target when no serial was supplied.
     target_serial = request.device_serial
     device_probe = await readiness_engine.run_device_submission_probe(target_serial=target_serial)
-    if device_probe and device_probe.summary in {"Device Locked", "Lock State Unknown"}:
-        locked_serial = (
-            device_probe.metadata.get("active_device", {}).get("serial") or target_serial or ""
-        )
-        detail = (
-            f"Android device {locked_serial} is locked. Unlock it and enter the home screen before running a task.".replace(
-                "  ", " "
-            ).strip()
-            if device_probe.summary == "Device Locked"
-            else f"Android device {locked_serial} lock state could not be verified. Keep it unlocked on the home screen and try again.".replace(
-                "  ", " "
-            ).strip()
-        )
-        raise HTTPException(status_code=409, detail=detail)
+    if device_probe and device_probe.summary == "Target Device Unavailable":
+        raise HTTPException(status_code=409, detail=device_probe.description)
 
     if device_probe and device_probe.metadata.get("active_device"):
         verified_serial = device_probe.metadata["active_device"].get("serial")
@@ -167,8 +206,8 @@ async def run_task(request: RunRequest):
 
     return await task_queue_service.enqueue_tasks(
         incoming_goals,
-        profile=request.profile or "flash",
-        expected_output=request.expected_output,
+        profile=profile,
+        expected_output=expected_output,
         enable_outputter=request.enable_outputter,
         verification_level=request.verification_level,
         explorer_mode=request.explorer_mode,
