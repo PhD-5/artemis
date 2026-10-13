@@ -30,6 +30,7 @@ export type SuggestionCategory =
 
 export interface SmartSuggestion {
   id: string;
+  archived?: boolean;
   title: string;
   description: string;
   goal: string;

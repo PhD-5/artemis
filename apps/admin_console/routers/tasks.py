@@ -25,7 +25,7 @@ try:
     from admin_console.core.state import state
     from admin_console.database.repositories.session_repository import session_repo
     from admin_console.database.repositories.task_preset_repository import task_preset_repo
-    from admin_console.schemas.task_preset_schema import TaskPreset, TaskPresetInput
+    from admin_console.schemas.task_preset_schema import TaskPreset, TaskPresetArchiveInput, TaskPresetInput
     from admin_console.schemas.task_schema import RunRequest
     from admin_console.services.ipc_service import ipc_service
     from admin_console.services.model_service import model_service
@@ -36,7 +36,7 @@ except ImportError:
     from apps.admin_console.core.state import state
     from apps.admin_console.database.repositories.session_repository import session_repo
     from apps.admin_console.database.repositories.task_preset_repository import task_preset_repo
-    from apps.admin_console.schemas.task_preset_schema import TaskPreset, TaskPresetInput
+    from apps.admin_console.schemas.task_preset_schema import TaskPreset, TaskPresetArchiveInput, TaskPresetInput
     from apps.admin_console.schemas.task_schema import RunRequest
     from apps.admin_console.services.ipc_service import ipc_service
     from apps.admin_console.services.model_service import model_service
@@ -88,6 +88,14 @@ async def get_task_preset(preset_id: str):
 @router.put("/api/tasks/presets/{preset_id}", response_model=TaskPreset)
 async def update_task_preset(preset_id: str, payload: TaskPresetInput):
     task = task_preset_repo.update(preset_id, payload)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task preset not found")
+    return task
+
+
+@router.patch("/api/tasks/presets/{preset_id}/archive", response_model=TaskPreset)
+async def archive_task_preset(preset_id: str, payload: TaskPresetArchiveInput):
+    task = task_preset_repo.set_archived(preset_id, payload.archived)
     if task is None:
         raise HTTPException(status_code=404, detail="Task preset not found")
     return task
@@ -157,6 +165,8 @@ async def run_task(request: RunRequest):
         template = task_preset_repo.get(request.template_id)
         if template is None:
             raise HTTPException(status_code=404, detail="Task template not found")
+        if template.archived:
+            raise HTTPException(status_code=409, detail="Task template is archived")
         try:
             incoming_goals = [
                 render_task_template(template.goal, template.parameters, request.args or {})

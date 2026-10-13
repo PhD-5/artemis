@@ -1178,7 +1178,7 @@
                 const catalog = await response.json();
                 if (!Array.isArray(catalog.tasks)) throw new Error('Invalid task catalog');
                 if (request !== taskCatalogRequest) return;
-                taskTemplates = catalog.tasks;
+                taskTemplates = catalog.tasks.filter(task => !task.archived);
                 const selector = document.getElementById('task-template-select');
                 selector.replaceChildren();
                 const placeholder = document.createElement('option');

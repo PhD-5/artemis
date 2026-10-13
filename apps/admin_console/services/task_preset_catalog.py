@@ -449,6 +449,8 @@ class TaskRecommendationEngine:
         scored_tasks: list[tuple[int, TaskPreset, bool]] = []
 
         for task in self.repository.list_all():
+            if task.archived:
+                continue
             # Check package presence
             is_matched = False
             if pkgs_set:

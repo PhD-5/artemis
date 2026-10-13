@@ -189,6 +189,10 @@ export class HomeComponent implements OnInit, OnDestroy {
   public isSubmitting = signal<boolean>(false);
   public errorMessage = signal<string | null>(null);
   public selectedTemplate = signal<SmartSuggestion | null>(null);
+  public selectedTemplateArchived = computed(() => {
+    const id = this.selectedTemplate()?.id;
+    return !!id && !!this.taskRecService.allTasks().find(task => task.id === id)?.archived;
+  });
   public templateArgs = signal<Record<string, string>>({});
   public templatePreview = computed(() => {
     const template = this.selectedTemplate();
@@ -461,6 +465,8 @@ export class HomeComponent implements OnInit, OnDestroy {
   // Suggestion category filter & shuffle state
   public selectedCategory = signal<SuggestionCategory>('all');
   public shuffleOffset = signal<number>(0);
+  public archivingId = signal<string | null>(null);
+  public archiveError = signal<string | null>(null);
 
   // Recommendation app matching follows the task target, not the diagnostic highlight.
   public installedPackages = computed<Set<string>>(() => {
@@ -895,6 +901,7 @@ export class HomeComponent implements OnInit, OnDestroy {
   }
 
   public applySuggestion(item: SmartSuggestion): void {
+    if (item.archived) return;
     this.selectedTemplate.set(item);
     this.templateArgs.set({});
     this.profileOverridden = false;
@@ -903,6 +910,19 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.selectedProfile.set(item.profile);
     this.expectedOutput.set(item.expectedOutput ?? '');
     this.errorMessage.set(null);
+  }
+
+  public archiveSuggestion(item: SmartSuggestion): void {
+    if (this.archivingId()) return;
+    this.archivingId.set(item.id);
+    this.archiveError.set(null);
+    this.taskRecService.setArchived(item.id, true).subscribe({
+      next: () => this.archivingId.set(null),
+      error: err => {
+        this.archivingId.set(null);
+        this.archiveError.set(taskErrorDetail(err?.error?.detail) || 'Could not archive template. Please try again.');
+      }
+    });
   }
 
   public copyRecommendedJson(item: SmartSuggestion): void {
@@ -958,6 +978,10 @@ export class HomeComponent implements OnInit, OnDestroy {
 
   public runTask(): void {
     const template = this.selectedTemplate();
+    if (this.selectedTemplateArchived()) {
+      this.errorMessage.set('This template is archived. Unarchive it before running.');
+      return;
+    }
     const goal = this.taskGoal().trim();
     if (template && this.missingParameters().length) {
       this.errorMessage.set(`Enter a value for: ${this.missingParameters().join(', ')}. Empty values are allowed; each parameter must be entered.`);

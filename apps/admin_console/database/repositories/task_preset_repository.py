@@ -71,9 +71,29 @@ class TaskPresetRepository:
         with db_session(self.db_path) as conn:
             with conn:
                 updated = conn.execute(
-                    "UPDATE task_presets SET payload = ? WHERE id = ?", (task.model_dump_json(), preset_id)
+                    "UPDATE task_presets SET payload = json_set(?, '$.archived', "
+                    "json(CASE WHEN json_extract(payload, '$.archived') THEN 'true' ELSE 'false' END)) "
+                    "WHERE id = ?",
+                    (task.model_dump_json(), preset_id),
                 ).rowcount
-        return task if updated else None
+                row = (
+                    conn.execute("SELECT payload FROM task_presets WHERE id = ?", (preset_id,)).fetchone()
+                    if updated else None
+                )
+        return TaskPreset.model_validate_json(row["payload"]) if row else None
+
+    def set_archived(self, preset_id: str, archived: bool) -> TaskPreset | None:
+        with db_session(self.db_path) as conn:
+            with conn:
+                updated = conn.execute(
+                    "UPDATE task_presets SET payload = json_set(payload, '$.archived', json(?)) WHERE id = ?",
+                    (json.dumps(archived), preset_id),
+                ).rowcount
+                row = (
+                    conn.execute("SELECT payload FROM task_presets WHERE id = ?", (preset_id,)).fetchone()
+                    if updated else None
+                )
+        return TaskPreset.model_validate_json(row["payload"]) if row else None
 
     def delete(self, preset_id: str) -> bool:
         with db_session(self.db_path) as conn:

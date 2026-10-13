@@ -36,7 +36,7 @@ Setup recommends DeepSeek, with Zhipu, Gemini and custom provider options. Keys 
 
 Recommended Tasks uses the backend SQLite catalog. Expand **Manage recommended tasks** for the full catalog, details, create/edit forms and confirmed deletion. Each task can declare ordered, case-sensitive parameter names (one ASCII identifier per line). Keep `${NAME}` in the Goal template and use `$${NAME}` to show a literal `${NAME}`. **Use task** selects the template in the Home composer; enter each declared parameter (an explicitly entered empty value is allowed) and review the read-only, single-pass preview before running. Switching to a different template resets arguments; **Edit as custom task** or a quick prompt switches back to an ordinary goal. The recommendation cards retain category filtering, device-app matching and shuffle.
 
-Each Recommended List card has **Copy** immediately to the left of **Use** in its bottom-right corner. Copy writes the template's `POST /api/run` JSON (`template_id` plus all declared arguments as empty strings) without selecting the card, changing the current task draft or submitting a task. Use still selects the template for parameter entry.
+Each Recommended List card has **Archive**, **Copy**, and **Use**, in that order, in its bottom-right corner. Archive persists a disabled state without deleting template content or changing the current task draft. Archived templates disappear from recommendations and the Admin Debug Console's template selector. Open **Archived Templates** beside Shuffle (or the manager's Archived Templates tab) to inspect, edit, copy, delete, or **Unarchive** them. Unarchive restores the template to recommendations; category and device ranking still apply. A selected archived template cannot run until restored. Copy writes the template's `POST /api/run` JSON (`template_id` plus all declared arguments as empty strings) without selecting the card, changing the current task draft or submitting a task. Use still selects the template for parameter entry.
 
 Selecting a template displays its **Expected Output** directly below the task preview in a multiline field, preserving JSON and line breaks. Pro allows per-run edits or **Clear expected output**; an untouched field inherits the saved template value. Flash keeps saved output visible as read-only, with structured output editing available after switching to Pro. Switching templates restores the newly selected template's saved output; editing the launch form does not update the persisted template.
 
@@ -54,10 +54,13 @@ Setup displays detected devices without global active-device selection. The Home
 
 ### Task-template API
 
-- `GET /api/tasks/catalog`: full `{ tasks, app_registry }` catalog.
-- `GET /api/tasks/presets`: existing filtered/device-aware recommendations.
+- `GET /api/tasks/catalog`: full `{ tasks, app_registry }` catalog, including archived templates.
+- `GET /api/tasks/presets`: filtered/device-aware recommendations, excluding archived templates.
 - `POST /api/tasks/presets`: create a template; returns 201 with a server-generated ID.
 - `GET /api/tasks/presets/{id}` / `PUT /api/tasks/presets/{id}`: view/full update.
+- `PATCH /api/tasks/presets/{id}/archive`: send `{ "archived": true }` to archive or `{ "archived": false }` to restore; returns the updated template.
 - `DELETE /api/tasks/presets/{id}`: confirmed UI deletion; API returns 204.
+
+Template responses include `archived`; older stored templates default to active. Content updates preserve archive status. New `POST /api/run` submissions referencing an archived template return 409 before device probing or queue admission. Already admitted tasks and idempotent retries retain their original execution snapshot.
 
 Payload fields are `title`, `description`, `goal` (the template prompt), `parameters` (ordered string identifiers, default `[]`), `profile`, `category`, `tag`, `apps`, `required_packages`, `match_mode`, `priority` and optional `expected_output`. Missing IDs return 404; invalid fields return 422. The Angular service maps snake_case wire fields to the existing camelCase view model. Templates are seeded transactionally once, not whenever the table is empty. Home submits `{ "template_id": "...", "args": { "NAME": "value" } }` to `POST /api/run` (along with selected device and optional run settings), never the preview as a goal. Raw goals still use the normal `{ "goal": "..." }` request; retries use the saved session's original goal even if a template changes or is deleted.

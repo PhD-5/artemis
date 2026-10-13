@@ -77,6 +77,39 @@ async def test_preset_crud_catalog_and_validation(repository, monkeypatch):
         assert (await client.delete(f"/api/tasks/presets/{task_id}")).status_code == 404
 
 
+def test_archived_preset_persists_through_reload_and_content_edit(repository):
+    seed = repository.list_all()[0]
+    with db_session(repository.db_path) as conn, conn:
+        conn.execute(
+            "UPDATE task_presets SET payload = ? WHERE id = ?",
+            (seed.model_dump_json(exclude={"archived"}), seed.id),
+        )
+    assert repository.get(seed.id).archived is False
+
+    archived = repository.set_archived(seed.id, True)
+    assert archived is not None
+    assert archived.archived is True
+    assert archived.goal == seed.goal
+    restarted = TaskPresetRepository(repository.db_path)
+    restarted.initialize(PRESET_TASK_CATALOG)
+    assert restarted.get(seed.id) == archived
+    edited = restarted.update(
+        seed.id, TaskPresetInput(**{**seed.model_dump(exclude={"id", "archived"}), "title": "Edited while archived"})
+    )
+    assert edited is not None
+    assert edited.archived is True
+    assert edited.title == "Edited while archived"
+    assert edited.goal == seed.goal
+    assert repository.get(seed.id) == edited
+    unarchived = repository.set_archived(seed.id, False)
+    assert unarchived is not None
+    assert unarchived.archived is False
+    assert unarchived.title == edited.title
+    assert unarchived.goal == edited.goal
+    assert restarted.get(seed.id) == unarchived
+    assert repository.set_archived("missing", True) is None
+
+
 @pytest.fixture
 def run_app(repository, monkeypatch, tmp_path):
     queue_state = importlib.import_module(tasks.task_queue_service.__module__).state
@@ -147,6 +180,56 @@ async def test_template_run_uses_literal_arguments_and_admission_snapshot(run_ap
         assert retried.json()["tasks"][0] == admitted
         assert tasks.state.queue_items == [admitted]
         tasks.readiness_engine.run_device_submission_probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_archive_endpoint_filters_recommendations_and_blocks_new_runs(run_app, repository, monkeypatch):
+    monkeypatch.setattr(tasks, "task_recommendation_engine", TaskRecommendationEngine(repository))
+    template = repository.create(TaskPresetInput(**PRESET_TASK_CATALOG[0].model_dump(exclude={"id", "archived"})))
+    url = f"/api/tasks/presets/{template.id}"
+    request = {"template_id": template.id, "device_serial": "target", "session_id": str(uuid4())}
+    async with AsyncClient(transport=ASGITransport(app=run_app), base_url="http://localhost") as client:
+        original = await client.post("/api/run", json=request)
+        assert original.status_code == 200
+        archived = await client.patch(f"{url}/archive", json={"archived": True})
+        assert archived.status_code == 200
+        assert archived.json()["archived"] is True
+        assert archived.json()["goal"] == template.goal
+        assert (await client.get(url)).json()["archived"] is True
+        catalog = (await client.get("/api/tasks/catalog")).json()["tasks"]
+        assert next(item for item in catalog if item["id"] == template.id)["archived"] is True
+        recommended = (await client.get("/api/tasks/presets", params={"limit": 1000})).json()
+        assert template.id not in {item["id"] for item in recommended}
+
+        updated = await client.put(url, json={**template.model_dump(exclude={"id"}), "title": "Archived edit"})
+        assert updated.status_code == 200
+        assert updated.json()["archived"] is True
+        assert updated.json()["title"] == "Archived edit"
+        assert repository.get(template.id).archived is True
+
+        tasks.readiness_engine.run_device_submission_probe.reset_mock()
+        rejected = await client.post("/api/run", json={**request, "session_id": str(uuid4())})
+        assert rejected.status_code == 409
+        assert "archived" in rejected.text
+        tasks.readiness_engine.run_device_submission_probe.assert_not_awaited()
+        assert tasks.state.queue_items == original.json()["tasks"]
+
+        retried = await client.post("/api/run", json=request)
+        assert retried.status_code == 200
+        assert retried.json()["enqueued_count"] == 0
+        assert retried.json()["tasks"] == original.json()["tasks"]
+        tasks.readiness_engine.run_device_submission_probe.assert_not_awaited()
+
+        assert (await client.patch("/api/tasks/presets/missing/archive", json={"archived": True})).status_code == 404
+        unarchived = await client.patch(f"{url}/archive", json={"archived": False})
+        assert unarchived.status_code == 200
+        assert unarchived.json()["archived"] is False
+        assert unarchived.json()["title"] == "Archived edit"
+        recommended = (await client.get("/api/tasks/presets", params={"limit": 1000})).json()
+        assert template.id in {item["id"] for item in recommended}
+        resumed = await client.post("/api/run", json={**request, "session_id": str(uuid4())})
+        assert resumed.status_code == 200
+        assert resumed.json()["tasks"][0]["goal"] == template.goal
 
 
 @pytest.mark.asyncio
@@ -307,7 +390,7 @@ async def test_legacy_placeholder_presets_migrate_before_catalog_loading(run_app
     # one bad row from a catalog response.
     repository.initialize(PRESET_TASK_CATALOG)
     assert repository.get(manual.id) == manual
-    expected = {**legacy, "parameters": ["APP_NAME", "QUERY"]}
+    expected = {**legacy, "parameters": ["APP_NAME", "QUERY"], "archived": False}
     assert repository.get(legacy["id"]).model_dump() == expected
     repository.initialize(PRESET_TASK_CATALOG)
     assert repository.get(legacy["id"]).model_dump() == expected

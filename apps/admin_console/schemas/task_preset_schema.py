@@ -1,6 +1,6 @@
 """Validated API and storage representation of recommended tasks."""
 
-from pydantic import BaseModel, Field, StrictStr, model_validator
+from pydantic import BaseModel, Field, StrictBool, StrictStr, model_validator
 from typing import Literal
 
 try:
@@ -36,5 +36,10 @@ class TaskPresetInput(BaseModel):
         return self
 
 
+class TaskPresetArchiveInput(BaseModel):
+    archived: StrictBool
+
+
 class TaskPreset(TaskPresetInput):
     id: str
+    archived: bool = False

@@ -15,7 +15,7 @@
  */
 
 import { HttpClient } from '@angular/common/http';
-import { Injectable, inject, signal } from '@angular/core';
+import { computed, Injectable, inject, signal } from '@angular/core';
 import { map, Observable, tap } from 'rxjs';
 import { AppReference, SmartSuggestion, SuggestionCategory } from '../data/smart-tasks.data';
 
@@ -31,7 +31,7 @@ interface CatalogResponse {
   app_registry: Record<string, AppReference>;
 }
 
-export type TaskPresetInput = Omit<SmartSuggestion, 'id'>;
+export type TaskPresetInput = Omit<SmartSuggestion, 'id' | 'archived'>;
 
 function toSuggestion(task: PresetResponse): SmartSuggestion {
   const { required_packages, match_mode, expected_output, ...fields } = task;
@@ -56,6 +56,8 @@ export class TaskRecommendationService {
   private readonly registryState = signal<Record<string, AppReference>>({});
   /** Complete, unfiltered live catalog; management and suggestions share this state. */
   public readonly allTasks = this.tasksState.asReadonly();
+  public readonly activeTasks = computed(() => this.allTasks().filter(task => !task.archived));
+  public readonly archivedTasks = computed(() => this.allTasks().filter(task => task.archived));
   public readonly appRegistry = this.registryState.asReadonly();
 
   public loadCatalog(): Observable<SmartSuggestion[]> {
@@ -84,6 +86,13 @@ export class TaskRecommendationService {
     );
   }
 
+  public setArchived(id: string, archived: boolean): Observable<SmartSuggestion> {
+    return this.http.patch<PresetResponse>(`/api/tasks/presets/${encodeURIComponent(id)}/archive`, { archived }).pipe(
+      map(toSuggestion),
+      tap(task => this.tasksState.update(tasks => tasks.map(existing => existing.id === id ? task : existing)))
+    );
+  }
+
   public deletePreset(id: string): Observable<void> {
     return this.http.delete<void>(`/api/tasks/presets/${encodeURIComponent(id)}`).pipe(
       tap(() => this.tasksState.update(tasks => tasks.filter(task => task.id !== id)))
@@ -106,7 +115,7 @@ export class TaskRecommendationService {
     shuffleOffset: number = 0
   ): SmartSuggestion[] {
     const hasDevice = installedPackages.size > 0;
-    const scored = this.allTasks().map(task => {
+    const scored = this.activeTasks().map(task => {
       const isMatched = this.isSuggestionOnDevice(task, installedPackages);
       let score = task.priority ?? 50;
       if (hasDevice) {

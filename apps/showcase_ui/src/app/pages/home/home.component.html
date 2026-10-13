@@ -1584,6 +1584,9 @@
               @if (missingParameters().length) {
                 <p class="template-hint">Enter {{ missingParameters().join(', ') }} to run this template. Copy API JSON uses empty strings for arguments not yet entered.</p>
               }
+              @if (selectedTemplateArchived()) {
+                <p class="template-hint" role="status">This template is archived. Open Archived Templates and unarchive it before running.</p>
+              }
             </div>
           } @else {
             <div class="composer-input-area">
@@ -1669,7 +1672,7 @@
                 type="button"
                 class="btn-run-composer"
                 [class.btn-run-pro]="selectedProfile() === 'pro'"
-                [disabled]="(selectedTemplate() ? missingParameters().length > 0 : !taskGoal().trim()) || isSubmitting() || !systemService.canSubmitTask()"
+                [disabled]="selectedTemplateArchived() || (selectedTemplate() ? missingParameters().length > 0 : !taskGoal().trim()) || isSubmitting() || !systemService.canSubmitTask()"
                 [title]="systemService.taskDeviceIssue() || (!systemService.canSubmitTask() ? 'Complete System Setup before running' : 'Run task')"
                 (click)="runTask()"
               >
@@ -1832,7 +1835,7 @@
 
         <!-- Recommended Tasks Hub (Clean & Direct) -->
         <div class="smart-suggestions-container">
-          <app-recommended-task-manager (useTask)="applySuggestion($event)"></app-recommended-task-manager>
+          <app-recommended-task-manager #taskManager (useTask)="applySuggestion($event)"></app-recommended-task-manager>
           <!-- Header Bar: Clean Category Tabs & Shuffle -->
           <div class="suggestions-header-bar">
             <div class="header-left">
@@ -1895,12 +1898,19 @@
             </div>
 
             <div class="header-right">
+              <button type="button" class="btn-shuffle-suggestions" (click)="taskManager.openArchived()">
+                <span class="material-symbols-outlined archive-icon">inventory_2</span>
+                <span>Archived Templates ({{ taskRecService.archivedTasks().length }})</span>
+              </button>
               <button type="button" class="btn-shuffle-suggestions" (click)="shuffleSuggestions()" title="Discover more tasks">
                 <span class="material-symbols-outlined shuffle-icon">shuffle</span>
                 <span>Shuffle</span>
               </button>
             </div>
           </div>
+          @if (archiveError()) {
+            <p class="archive-error" role="alert">{{ archiveError() }}</p>
+          }
 
           <!-- Suggestions Grid -->
           <div class="suggestions-cards-grid">
@@ -1938,6 +1948,14 @@
                 <div class="card-footer-row">
                   <span class="tag-pill">{{ item.tag }}</span>
                   <div class="card-actions">
+                    <button type="button" class="archive-prompt-action"
+                      (click)="$event.stopPropagation(); archiveSuggestion(item)"
+                      [disabled]="archivingId() !== null"
+                      [attr.aria-label]="'Archive ' + item.title"
+                      title="Archive template and remove it from recommendations">
+                      <span class="material-symbols-outlined">archive</span>
+                      <span>{{ archivingId() === item.id ? 'Archiving…' : 'Archive' }}</span>
+                    </button>
                     <button type="button" class="copy-prompt-action"
                       (click)="$event.stopPropagation(); copyRecommendedJson(item)"
                       [attr.aria-label]="'Copy API JSON for ' + item.title"

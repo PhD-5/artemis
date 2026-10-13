@@ -4698,6 +4698,7 @@ $text-light: #94a3b8;
         flex-direction: column;
         gap: 12px;
         margin-top: 10px;
+        .archive-error { color: #b91c1c; font-size: 13px; margin: 0; }
 
         .suggestions-header-bar {
           display: flex;
@@ -4807,6 +4808,9 @@ $text-light: #94a3b8;
           }
 
           .header-right {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
             .btn-shuffle-suggestions {
               display: inline-flex;
               align-items: center;
@@ -4823,6 +4827,7 @@ $text-light: #94a3b8;
               cursor: pointer;
               transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 
+              .archive-icon { font-size: 14px; }
               .shuffle-icon {
                 font-size: 14px;
                 transition: transform 0.2s ease;
@@ -4995,7 +5000,7 @@ $text-light: #94a3b8;
 
               .card-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-              .copy-prompt-action, .use-prompt-action {
+              .archive-prompt-action, .copy-prompt-action, .use-prompt-action {
                 display: inline-flex;
                 align-items: center;
                 gap: 3px;
@@ -5013,6 +5018,7 @@ $text-light: #94a3b8;
                 cursor: pointer;
 
                 &:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+                &:disabled { opacity: 0.45; cursor: wait; }
                 .material-symbols-outlined { font-size: 13px; }
 
                 .action-arrow {
@@ -5020,6 +5026,8 @@ $text-light: #94a3b8;
                   transition: transform 0.15s ease;
                 }
               }
+
+              .archive-prompt-action { color: #64748b; }
             }
 
             &:hover .use-prompt-action {

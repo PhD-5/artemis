@@ -1,4 +1,4 @@
-import { Component, computed, EventEmitter, inject, OnInit, Output, signal } from '@angular/core';
+import { Component, computed, ElementRef, EventEmitter, inject, OnInit, Output, signal, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { SmartSuggestion } from '../../core/data/smart-tasks.data';
 import { TaskPresetInput, TaskRecommendationService } from '../../core/services/task-recommendation.service';
@@ -9,21 +9,35 @@ import { taskErrorDetail, toRunTaskPayload } from '../../services/agent.service'
   standalone: true,
   imports: [FormsModule],
   template: `
-    <details class="manager-disclosure">
-      <summary>Manage recommended tasks · New / Edit / Delete</summary>
+    <details #managerDisclosure class="manager-disclosure">
+      <summary>Manage recommended tasks · New / Edit / Archive / Delete</summary>
     <section class="preset-manager" aria-label="Recommended task manager">
       <header>
         <h2>Recommended Tasks</h2>
-        <button class="primary" type="button" (click)="newTask()">New task</button>
+        <button class="primary" type="button" [disabled]="saving()" (click)="newTask()">New task</button>
       </header>
       @if (loading()) { <p role="status">Loading tasks…</p> }
+      @if (archivePendingId()) { <p role="status">Updating template archive status…</p> }
       @if (error()) { <p role="alert">{{ error() }}</p> }
-      <div class="layout">
-        <ul aria-label="All recommended tasks">
-          @for (task of recommendations.allTasks(); track task.id) {
+      <div class="template-tabs" role="tablist" aria-label="Template status">
+        <button id="active-templates-tab" type="button" role="tab" aria-controls="template-list"
+          [attr.aria-selected]="templateView() === 'active'" [disabled]="saving()" (click)="switchView('active')">
+          Active templates ({{ recommendations.activeTasks().length }})
+        </button>
+        <button id="archived-templates-tab" type="button" role="tab" aria-controls="template-list"
+          [attr.aria-selected]="templateView() === 'archived'" [disabled]="saving()" (click)="switchView('archived')">
+          Archived Templates ({{ recommendations.archivedTasks().length }})
+        </button>
+      </div>
+      <div class="layout" id="template-list" role="tabpanel"
+        [attr.aria-labelledby]="templateView() === 'active' ? 'active-templates-tab' : 'archived-templates-tab'">
+        <ul [attr.aria-label]="templateView() === 'active' ? 'Active templates' : 'Archived Templates'">
+          @for (task of visibleTasks(); track task.id) {
             <li><button type="button" (click)="select(task.id)" [attr.aria-current]="selectedId() === task.id ? 'true' : null">{{ task.title }}</button></li>
           } @empty {
-            @if (!loading()) { <li>No tasks saved.</li> }
+            @if (!loading() && !error()) {
+              <li>{{ templateView() === 'active' ? 'No active templates saved.' : 'No archived templates.' }}</li>
+            }
           }
         </ul>
         <div class="detail">
@@ -40,18 +54,25 @@ import { taskErrorDetail, toRunTaskPayload } from '../../services/agent.service'
             <p><strong>Apps:</strong> @for (app of task.apps; track $index) { {{ app.name }} } @empty { None }</p>
             <p><strong>Required packages:</strong> {{ task.requiredPackages?.join(', ') || 'None' }} ({{ task.matchMode || 'any' }})</p>
             <p><strong>Priority:</strong> {{ task.priority ?? 50 }}</p>
+            <button type="button" [disabled]="saving()" (click)="setArchived(task)">
+              {{ archivePendingId() === task.id ? (task.archived ? 'Unarchiving…' : 'Archiving…') : (task.archived ? 'Unarchive' : 'Archive') }}
+            </button>
             <button type="button" class="copy-api-json" (click)="copyApiJson(task)">
               {{ copiedId() === task.id ? 'Copied!' : 'Copy API JSON' }}
             </button>
-            <p class="copy-json-hint">Copies a POST /api/run request with empty argument values. Use task to fill them.</p>
-            <button class="primary" type="button" (click)="useTask.emit(task)">Use task</button>
-            <button type="button" (click)="edit(task)">Edit</button>
+            <p class="copy-json-hint">Copies a POST /api/run request with empty argument values. {{ task.archived ? 'Unarchive this template before using it.' : 'Use task to fill them.' }}</p>
+            @if (task.archived) {
+              <p role="status">This template is archived and cannot be used until it is unarchived.</p>
+            } @else {
+              <button class="primary" type="button" [disabled]="saving()" (click)="useTask.emit(task)">Use task</button>
+            }
+            <button type="button" [disabled]="saving()" (click)="edit(task)">Edit</button>
             @if (confirmDelete() === task.id) {
               <p class="delete-warning">Delete this task permanently?</p>
               <button class="danger" type="button" [disabled]="saving()" (click)="remove(task.id)">Confirm delete</button>
               <button type="button" (click)="confirmDelete.set(null)">Cancel</button>
             } @else {
-              <button class="danger" type="button" (click)="confirmDelete.set(task.id)">Delete</button>
+              <button class="danger" type="button" [disabled]="saving()" (click)="confirmDelete.set(task.id)">Delete</button>
             }
           }
           @if (mode() === 'new' || mode() === 'edit') {
@@ -116,6 +137,8 @@ import { taskErrorDetail, toRunTaskPayload } from '../../services/agent.service'
     .preset-manager { padding: 1rem 0 0; }
     .preset-manager header, .layout { display: flex; gap: 1rem; }
     .preset-manager header { justify-content: space-between; align-items: center; }
+    .template-tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0; }
+    .template-tabs button[aria-selected="true"] { color: #1d4ed8; background: #eff6ff; border-color: #2563eb; font-weight: 600; }
     h2 { font-size: 16px; }
     h2, h3, strong { color: #0f172a; }
     .layout > ul { flex: 1; max-height: 28rem; overflow: auto; list-style: none; padding: 0; min-width: 160px; }
@@ -155,14 +178,19 @@ import { taskErrorDetail, toRunTaskPayload } from '../../services/agent.service'
 })
 export class RecommendedTaskManagerComponent implements OnInit {
   public readonly recommendations = inject(TaskRecommendationService);
+  @ViewChild('managerDisclosure') private managerDisclosure?: ElementRef<HTMLDetailsElement>;
   @Output() readonly useTask = new EventEmitter<SmartSuggestion>();
   readonly loading = signal(false);
   readonly saving = signal(false);
+  readonly archivePendingId = signal<string | null>(null);
   readonly error = signal<string | null>(null);
   readonly mode = signal<'list' | 'view' | 'edit' | 'new'>('list');
+  readonly templateView = signal<'active' | 'archived'>('active');
+  readonly visibleTasks = computed(() => this.templateView() === 'active'
+    ? this.recommendations.activeTasks() : this.recommendations.archivedTasks());
   readonly selectedId = signal<string | null>(null);
   readonly confirmDelete = signal<string | null>(null);
-  readonly selectedTask = computed(() => this.recommendations.allTasks().find(task => task.id === this.selectedId()));
+  readonly selectedTask = computed(() => this.visibleTasks().find(task => task.id === this.selectedId()));
   readonly copiedId = signal<string | null>(null);
 
   async copyApiJson(task: SmartSuggestion): Promise<void> {
@@ -212,7 +240,21 @@ export class RecommendedTaskManagerComponent implements OnInit {
     return { title: '', description: '', goal: '', parameters: [], profile: 'flash', category: 'flash', tag: '', apps: [], requiredPackages: [], matchMode: 'any', priority: 50 };
   }
 
+  openArchived(): void {
+    if (this.managerDisclosure) this.managerDisclosure.nativeElement.open = true;
+    this.switchView('archived');
+  }
+
+  switchView(view: 'active' | 'archived'): void {
+    this.templateView.set(view);
+    this.selectedId.set(null);
+    this.mode.set('list');
+    this.confirmDelete.set(null);
+    this.error.set(null);
+  }
+
   select(id: string): void {
+    if (this.saving()) return;
     this.selectedId.set(id);
     this.mode.set('view');
     this.confirmDelete.set(null);
@@ -220,6 +262,9 @@ export class RecommendedTaskManagerComponent implements OnInit {
   }
 
   newTask(): void {
+    if (this.saving()) return;
+    this.templateView.set('active');
+    this.selectedId.set(null);
     this.draft = this.emptyDraft();
     this.packagesText = '';
     this.parametersText = '';
@@ -229,6 +274,7 @@ export class RecommendedTaskManagerComponent implements OnInit {
   }
 
   edit(task: SmartSuggestion): void {
+    if (this.saving()) return;
     this.draft = { title: task.title, description: task.description, goal: task.goal, parameters: [...(task.parameters ?? [])], profile: task.profile, category: task.category, tag: task.tag, apps: task.apps.map(app => ({ ...app })), requiredPackages: [...(task.requiredPackages ?? [])], matchMode: task.matchMode ?? 'any', priority: task.priority ?? 50 };
     this.draft.expectedOutput = task.expectedOutput ?? '';
     this.packagesText = this.draft.requiredPackages?.join('\n') ?? '';
@@ -260,8 +306,37 @@ export class RecommendedTaskManagerComponent implements OnInit {
       ? this.recommendations.updatePreset(this.selectedId()!, payload)
       : this.recommendations.createPreset(payload);
     request.subscribe({
-      next: task => { this.saving.set(false); this.select(task.id); },
+      next: task => {
+        this.saving.set(false);
+        if ((task.archived ? 'archived' : 'active') === this.templateView()) {
+          this.select(task.id);
+        } else {
+          this.selectedId.set(null);
+          this.mode.set('list');
+        }
+      },
       error: err => { this.saving.set(false); this.error.set(taskErrorDetail(err.error?.detail) || 'Could not save task.'); }
+    });
+  }
+
+  setArchived(task: SmartSuggestion): void {
+    if (this.saving()) return;
+    this.saving.set(true);
+    this.archivePendingId.set(task.id);
+    this.error.set(null);
+    this.recommendations.setArchived(task.id, !task.archived).subscribe({
+      next: () => {
+        this.saving.set(false);
+        this.archivePendingId.set(null);
+        this.selectedId.set(null);
+        this.mode.set('list');
+        this.confirmDelete.set(null);
+      },
+      error: err => {
+        this.saving.set(false);
+        this.archivePendingId.set(null);
+        this.error.set(taskErrorDetail(err.error?.detail) || `Could not ${task.archived ? 'unarchive' : 'archive'} task.`);
+      }
     });
   }
 
